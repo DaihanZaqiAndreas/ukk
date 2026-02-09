@@ -70,7 +70,7 @@ class _LoginPageState extends State<LoginPage> {
         } else if (role == 'petugas') {
           targetPage = const PetugasDashboard();
         } else {
-          targetPage = const PeminjamDashboard();
+          targetPage = const DashboardPeminjamPage();
         }
 
         // 5. Navigasi

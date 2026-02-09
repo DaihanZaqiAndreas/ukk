@@ -1,4 +1,4 @@
-import 'dart:typed_data'; // Tambahkan ini untuk mendukung bytes gambar
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -13,20 +13,111 @@ class TambahProdukPage extends StatefulWidget {
 class _TambahProdukPageState extends State<TambahProdukPage> {
   final _namaController = TextEditingController();
   final _stokController = TextEditingController();
-  String? _selectedKategori;
-  final List<String> _kategoriList = [
-    'Kamera',
-    'Laptop',
-    'Lensa',
-    'Audio',
-    'Lainnya',
-  ];
+  final supabase = Supabase.instance.client;
 
-  // PERBAIKAN: Gunakan XFile dan Uint8List agar tidak error di Web
+  String? _selectedKategori;
+  
+  // List kategori dinamis (bukan final lagi)
+  List<String> _kategoriList = [];
+
   XFile? _pickedFile;
   Uint8List? _imageBytes;
   bool _isLoading = false;
-  final supabase = Supabase.instance.client;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCategories(); // Ambil data kategori saat aplikasi dibuka
+  }
+
+  // --- 1. AMBIL KATEGORI DARI DATABASE ---
+  Future<void> _fetchCategories() async {
+    try {
+      final response = await supabase.from('kategori').select('nama_kategori').order('nama_kategori');
+      
+      if (mounted) {
+        setState(() {
+          _kategoriList = (response as List)
+              .map((e) => e['nama_kategori'] as String)
+              .toList();
+        });
+      }
+    } catch (e) {
+      debugPrint("Error fetch kategori: $e");
+      // Fallback jika database belum siap
+      setState(() {
+        _kategoriList = ['Kamera', 'Laptop', 'Lensa', 'Audio', 'Lainnya'];
+      });
+    }
+  }
+
+  // --- 2. TAMBAH KATEGORI BARU ---
+  Future<void> _addNewCategory(String newCategory) async {
+    if (newCategory.isEmpty) return;
+
+    try {
+      // Simpan ke Supabase
+      await supabase.from('kategori').insert({'nama_kategori': newCategory});
+
+      // Update UI: Tambah ke list & Langsung Pilih
+      setState(() {
+        _kategoriList.add(newCategory);
+        _selectedKategori = newCategory; // <--- INI YG MEMBUAT OTOMATIS TERPILIH
+      });
+
+      if (mounted) {
+        Navigator.pop(context); // Tutup dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Kategori baru ditambahkan & dipilih!"), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Gagal menambah: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // --- 3. DIALOG INPUT KATEGORI ---
+  void _showAddCategoryDialog() {
+    final TextEditingController catController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Tambah Kategori", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: catController,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            hintText: "Nama Kategori Baru...",
+            filled: true,
+            fillColor: Colors.grey[100],
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Batal", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => _addNewCategory(catController.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1565C0),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text("Simpan", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
@@ -36,7 +127,6 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     );
 
     if (pickedFile != null) {
-      // PERBAIKAN: Baca file sebagai bytes
       final bytes = await pickedFile.readAsBytes();
       setState(() {
         _pickedFile = pickedFile;
@@ -46,7 +136,6 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
   }
 
   Future<void> _saveProduct() async {
-    // PERBAIKAN: Cek ketersediaan file lewat bytes
     if (_namaController.text.isEmpty ||
         _imageBytes == null ||
         _selectedKategori == null) {
@@ -59,26 +148,21 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Upload Gambar (Gunakan uploadBinary agar support semua platform)
       final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-      await supabase.storage
-          .from('alat_images')
-          .uploadBinary(
+      await supabase.storage.from('alat_images').uploadBinary(
             fileName,
-            _imageBytes!, // Gunakan bytes yang sudah dibaca
+            _imageBytes!,
             fileOptions: const FileOptions(
               upsert: true,
               contentType: 'image/jpeg',
             ),
           );
 
-      // 2. Dapatkan URL
       final String imageUrl = supabase.storage
           .from('alat_images')
           .getPublicUrl(fileName);
 
-      // 3. Insert ke Tabel 'alat'
       await supabase.from('alat').insert({
         'nama_alat': _namaController.text.trim(),
         'kategori': _selectedKategori,
@@ -88,16 +172,13 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Berhasil ditambah!")),
+          const SnackBar(content: Text("Berhasil ditambah!"), backgroundColor: Colors.green),
         );
-        // PERBAIKAN: Kirim nilai 'true' saat kembali
         Navigator.pop(context, true); 
       }
     } catch (e) {
       if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -105,16 +186,11 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
 
   @override
   Widget build(BuildContext context) {
-    // UI TETAP SAMA PERSIS
     return Scaffold(
       backgroundColor: const Color(0xFF1565C0),
       appBar: AppBar(
         leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_ios_new,
-            color: Colors.white,
-            size: 20,
-          ),
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
@@ -165,7 +241,38 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
                     ),
                     const SizedBox(height: 20),
                     _buildFieldLabel("Kategori"),
-                    _buildDropdownField(),
+                    
+                    // --- MODIFIKASI: DROPDOWN + TOMBOL TAMBAH ---
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildDropdownField(),
+                        ),
+                        const SizedBox(width: 10),
+                        InkWell(
+                          onTap: _showAddCategoryDialog,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            height: 50,
+                            width: 50,
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade700, // Warna pembeda
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.orange.withOpacity(0.3),
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 3),
+                                )
+                              ],
+                            ),
+                            child: const Icon(Icons.add, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // ------------------------------------------
+
                     const SizedBox(height: 40),
                     _buildSubmitButton(),
                   ],
@@ -178,7 +285,6 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     );
   }
 
-  // PERBAIKAN: Gunakan Image.memory untuk menampilkan gambar
   Widget _buildImagePicker() {
     return GestureDetector(
       onTap: _pickImage,
@@ -193,9 +299,7 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
               borderRadius: BorderRadius.circular(20),
               image: _imageBytes != null
                   ? DecorationImage(
-                      image: MemoryImage(
-                        _imageBytes!,
-                      ), // Ganti FileImage dengan MemoryImage
+                      image: MemoryImage(_imageBytes!),
                       fit: BoxFit.cover,
                     )
                   : null,
@@ -224,7 +328,6 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     );
   }
 
-  // --- SISA WIDGET HELPER TETAP SAMA ---
   Widget _buildSectionHeader(String title) {
     return Row(
       children: [
@@ -292,14 +395,12 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
           ),
           icon: const Icon(Icons.expand_more),
           isExpanded: true,
-          items: _kategoriList
-              .map(
-                (val) => DropdownMenuItem(
-                  value: val,
-                  child: Text(val, style: const TextStyle(fontSize: 13)),
-                ),
-              )
-              .toList(),
+          items: _kategoriList.map((val) {
+            return DropdownMenuItem(
+              value: val,
+              child: Text(val, style: const TextStyle(fontSize: 13)),
+            );
+          }).toList(),
           onChanged: (value) => setState(() => _selectedKategori = value),
         ),
       ),

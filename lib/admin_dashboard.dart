@@ -3,6 +3,7 @@ import 'Daftar_Barang.dart';
 import 'login.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'tambah_user.dart';
+import 'package:intl/intl.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -19,9 +20,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     const DashboardHomeContent(),
     const InventoryPage(),
     const UserManagementPage(),
-    const Center(
-      child: Text("Halaman Laporan", style: TextStyle(color: Colors.white)),
-    ),
     const SettingsPage(),
   ];
 
@@ -62,10 +60,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
               label: '',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.pie_chart_rounded, size: 28),
-              label: '',
-            ),
-            BottomNavigationBarItem(
               icon: Icon(Icons.settings_rounded, size: 28),
               label: '',
             ),
@@ -79,207 +73,259 @@ class _AdminDashboardState extends State<AdminDashboard> {
 class DashboardHomeContent extends StatelessWidget {
   const DashboardHomeContent({super.key});
 
+  // 1. Fungsi Statistik (Tetap)
+  Future<Map<String, dynamic>> _getStats() async {
+    final supabase = Supabase.instance.client;
+    final responses = await Future.wait([
+      supabase.from('kategori').select('id'),
+      supabase.from('alat').select('stok'),
+      supabase.from('peminjaman').select('id').eq('status', 'dipinjam'),
+    ]);
+
+    int totalStok = 0;
+    for (var item in (responses[1] as List)) {
+      totalStok += (item['stok'] as int? ?? 0);
+    }
+
+    return {
+      'totalKategori': (responses[0] as List).length,
+      'totalStok': totalStok,
+      'totalPinjam': (responses[2] as List).length,
+    };
+  }
+
+  // 2. Fungsi Mengambil Riwayat + Nama Alat (Manual Fetch)
+  Future<List<Map<String, dynamic>>> _getHistoryData() async {
+    final supabase = Supabase.instance.client;
+    
+    // Ambil 5 peminjaman terakhir
+    final List<dynamic> response = await supabase
+        .from('peminjaman')
+        .select()
+        .order('tanggal_pinjam', ascending: false)
+        .limit(5);
+
+    List<Map<String, dynamic>> results = [];
+
+    for (var item in response) {
+      Map<String, dynamic> row = Map<String, dynamic>.from(item);
+      
+      // Ambil Nama Alat Manual (Agar tidak error Join)
+      try {
+        final alat = await supabase
+            .from('alat')
+            .select('nama_alat')
+            .eq('id', item['alat_id'])
+            .single();
+        row['display_nama_alat'] = alat['nama_alat'];
+      } catch (e) {
+        row['display_nama_alat'] = 'Alat #${item['alat_id']}';
+      }
+
+      // Cek kolom jumlah, jika tidak ada default ke 1
+      row['display_jumlah'] = item['jumlah'] ?? 1; 
+
+      results.add(row);
+    }
+    return results;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 60, 24, 10),
-          child: Text(
-            "Dashboard Admin",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.1,
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _getStats(),
+      builder: (context, snapshot) {
+        final stats = snapshot.data;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 60, 24, 10),
+              child: Text(
+                "Dashboard Admin",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
-          child: GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-            childAspectRatio: 1.4,
-            children: [
-              _buildStatCard(
-                "Kategori Alat",
-                "2",
-                const Color(0xFF1565C0),
-                Icons.inventory_2_outlined,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
+              child: GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 1.4,
+                children: [
+                  _buildStatCard("Kategori Alat", "${stats?['totalKategori'] ?? '...'}", const Color(0xFF1565C0), Icons.inventory_2_outlined),
+                  _buildStatCard("Stok Alat", "${stats?['totalStok'] ?? '...'}", const Color(0xFFEF5350), Icons.construction_outlined),
+                  _buildStatCard("Denda", "Rp 0", const Color(0xFF66BB6A), Icons.payments_outlined),
+                  _buildStatCard("Peminjaman", "${stats?['totalPinjam'] ?? '...'}", const Color(0xFFFFA726), Icons.assignment_outlined),
+                ],
               ),
-              _buildStatCard(
-                "Stok Alat",
-                "10",
-                const Color(0xFFEF5350),
-                Icons.construction_outlined,
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(35),
+                    topRight: Radius.circular(35),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 30, 24, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "Riwayat Peminjaman",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                          ),
+                          TextButton(onPressed: () {}, child: const Text("Lihat Semua")),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      // PANGGIL WIDGET TABEL DISINI
+                      Expanded(child: _buildHistoryTable()),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
               ),
-              _buildStatCard(
-                "Denda",
-                "Rp 0",
-                const Color(0xFF66BB6A),
-                Icons.payments_outlined,
-              ),
-              _buildStatCard(
-                "Peminjaman",
-                "4",
-                const Color(0xFFFFA726),
-                Icons.assignment_outlined,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- TABEL RIWAYAT YANG SUDAH DIUBAH KOLOMNYA ---
+  Widget _buildHistoryTable() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getHistoryData(), // Memanggil fungsi manual fetch di atas
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text("Tidak ada riwayat."));
+        }
+
+        final items = snapshot.data!;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              color: Color(0xFFF8FAFC),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(35),
-                topRight: Radius.circular(35),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(35),
-                topRight: Radius.circular(35),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 30, 24, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          "Riwayat Peminjaman",
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF1E293B),
-                          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor: WidgetStateProperty.all(Colors.grey[50]),
+              horizontalMargin: 20,
+              columnSpacing: 30,
+              columns: const [
+                // KOLOM 1: Ganti User ID -> Nama Alat 
+                DataColumn(
+                  label: Text(
+                    'ALAT',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+                // KOLOM 2: Ganti Alat ID -> Jumlah
+                DataColumn(
+                  label: Text(
+                    'JUMLAH',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+                // KOLOM 3: Tanggal (Tetap)
+                DataColumn(
+                  label: Text(
+                    'TGL PINJAM',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+                // KOLOM 4: Status (Tetap)
+                DataColumn(
+                  label: Text(
+                    'STATUS',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+              ],
+              rows: items.map((data) {
+                return DataRow(
+                  cells: [
+                    // DATA 1: Menampilkan Nama Alat
+                    DataCell(
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 120),
+                        child: Text(
+                          data['display_nama_alat'], 
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        TextButton(
-                          onPressed: () {},
-                          child: const Text("Lihat Semua"),
-                        ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: Container(
+                    // DATA 2: Menampilkan Jumlah (Default 1 jika null)
+                    DataCell(
+                      Center(child: Text("${data['display_jumlah']}")),
+                    ),
+                    // DATA 3: Tanggal
+                    DataCell(
+                      Text(
+                        DateFormat('dd/MM/yyyy').format(DateTime.parse(data['tanggal_pinjam'])),
+                      ),
+                    ),
+                    // DATA 4: Status Badge
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(15),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.03),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                          color: data['status'] == 'dipinjam' ? Colors.blue[50] : Colors.green[50],
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.vertical,
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: DataTable(
-                              headingRowColor: WidgetStateProperty.all(
-                                Colors.grey[50],
-                              ),
-                              dataRowMaxHeight: 60,
-                              horizontalMargin: 20,
-                              columnSpacing: 30,
-                              columns: const [
-                                DataColumn(
-                                  label: Text(
-                                    'NAMA',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                                DataColumn(
-                                  label: Text(
-                                    'ALAT',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                                DataColumn(
-                                  label: Text(
-                                    'PINJAM',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                                DataColumn(
-                                  label: Text(
-                                    'KEMBALI',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              rows: [
-                                _buildDataRow(
-                                  "Daihan",
-                                  "Headset",
-                                  "11/08/2025",
-                                  "14/08/2025",
-                                ),
-                                _buildDataRow(
-                                  "Ahmad",
-                                  "Kamera",
-                                  "12/08/2025",
-                                  "15/08/2025",
-                                ),
-                                _buildDataRow(
-                                  "Siti",
-                                  "Laptop",
-                                  "13/08/2025",
-                                  "16/08/2025",
-                                ),
-                              ],
-                            ),
+                        child: Text(
+                          data['status'].toString().toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: data['status'] == 'dipinjam' ? Colors.blue : Colors.green,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
                   ],
-                ),
-              ),
+                );
+              }).toList(),
             ),
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Widget _buildStatCard(
-    String title,
-    String count,
-    Color color,
-    IconData icon,
-  ) {
+  Widget _buildStatCard(String title, String value, Color color, IconData icon) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -287,88 +333,24 @@ class DashboardHomeContent extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
             offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 20),
-              ),
-              Text(
-                count,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1E293B),
-                ),
-              ),
-            ],
-          ),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[600],
-            ),
-          ),
+          Icon(icon, color: color, size: 28),
+          const Spacer(),
+          Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
         ],
       ),
     );
   }
-
-  DataRow _buildDataRow(
-    String nama,
-    String alat,
-    String pinjam,
-    String kembali,
-  ) {
-    return DataRow(
-      cells: [
-        DataCell(
-          Text(
-            nama,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-          ),
-        ),
-        DataCell(
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              alat,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.blue[800],
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-        DataCell(Text(pinjam, style: const TextStyle(fontSize: 12))),
-        DataCell(Text(kembali, style: const TextStyle(fontSize: 12))),
-      ],
-    );
-  }
 }
-
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -688,12 +670,11 @@ class UserManagementPage extends StatelessWidget {
     final supabase = Supabase.instance.client;
 
     return Scaffold(
-      backgroundColor:
-          Colors.transparent, // Agar menyatu dengan background AdminDashboard
+      backgroundColor: const Color(0xFF4A78D1), // Consistent Blue Background
       floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFF1565C0), // Biru tua
+        backgroundColor: const Color(0xFF1565C0),
         elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const AddUserPage()),
@@ -701,289 +682,251 @@ class UserManagementPage extends StatelessWidget {
         child: const Icon(Icons.person_add, color: Colors.white),
       ),
       body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Judul Halaman
+          // --- 1. HEADER SECTION ---
           const Padding(
-            padding: EdgeInsets.fromLTRB(24, 60, 24, 20),
-            child: Text(
-              "Manajemen User",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ),
-
-          // 2. Area Putih (Container Utama)
-          Expanded(
-            child: Container(
+            padding: EdgeInsets.fromLTRB(24, 60, 24, 30),
+            child: SizedBox(
               width: double.infinity,
-              decoration: const BoxDecoration(
-                color: Color(0xFFF8FAFC), // Putih keabuan lembut
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(35),
-                  topRight: Radius.circular(35),
-                ),
-              ),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(height: 20),
-
-                  // 3. Header Tabel (Nama, Email, Role, Aksi)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(flex: 3, child: _buildHeader("NAMA & EMAIL")),
-                        Expanded(flex: 2, child: _buildHeader("ROLE")),
-                        Expanded(
-                          flex: 2,
-                          child: Container(
-                            alignment: Alignment.centerRight,
-                            child: _buildHeader("AKSI"),
-                          ),
-                        ),
-                      ],
+                  Text(
+                    "Manajemen User",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
                     ),
                   ),
-                  const Divider(height: 1, color: Colors.grey),
-
-                  // 4. List Data (StreamBuilder)
-                  Expanded(
-                    child: StreamBuilder<List<Map<String, dynamic>>>(
-                      stream: supabase
-                          .from('user')
-                          .stream(primaryKey: ['id'])
-                          .order('nama', ascending: true),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
-                        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                          return _buildEmptyState();
-                        }
-
-                        final users = snapshot.data!;
-
-                        return ListView.separated(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 10,
-                          ),
-                          itemCount: users.length,
-                          separatorBuilder: (context, index) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final user = users[index];
-                            return _buildUserRow(context, user, supabase);
-                          },
-                        );
-                      },
+                  SizedBox(height: 8),
+                  Text(
+                    "Kelola akun admin, petugas, dan peminjam",
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
                     ),
                   ),
                 ],
               ),
             ),
           ),
+
+          // --- 2. CONTENT BODY ---
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8FAFC), // Soft gray-white background
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(35),
+                  topRight: Radius.circular(35),
+                ),
+              ),
+              child: StreamBuilder<List<Map<String, dynamic>>>(
+                stream: supabase
+                    .from('user')
+                    .stream(primaryKey: ['id'])
+                    .order('nama', ascending: true),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return _buildEmptyState();
+                  }
+
+                  final users = snapshot.data!;
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(20, 25, 20, 80),
+                    itemCount: users.length,
+                    itemBuilder: (context, index) {
+                      return _buildUserCard(context, users[index], supabase);
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // --- WIDGET HELPER ---
-
-  // 1. Style untuk Header Kolom
-  Widget _buildHeader(String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.bold,
-        color: Colors.grey[500],
-        letterSpacing: 0.5,
-      ),
-    );
-  }
-
-  // 2. Tampilan Baris Data User
-  Widget _buildUserRow(
+  // --- WIDGET: USER CARD (Redesigned) ---
+  Widget _buildUserCard(
     BuildContext context,
     Map<String, dynamic> user,
     SupabaseClient supabase,
   ) {
+    final String role = user['role'] ?? 'peminjam';
+    final Color roleColor = _getRoleColor(role);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
           ),
         ],
       ),
       child: Row(
         children: [
-          // Kolom 1: Icon + Nama + Email
-          Expanded(
-            flex: 3,
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Colors.blue.shade50,
-                  child: Text(
-                    (user['nama'] ?? 'U')[0].toUpperCase(),
-                    style: TextStyle(
-                      color: Colors.blue.shade700,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        user['nama'] ?? 'Tanpa Nama',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                          color: Color(0xFF1E293B),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        user['email'] ?? '-',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          // 1. Avatar Icon
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: roleColor.withOpacity(0.1),
+              shape: BoxShape.circle,
             ),
-          ),
-
-          // Kolom 2: Role Badge
-          Expanded(
-            flex: 2,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _getRoleColor(user['role']).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  (user['role'] ?? '-').toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: _getRoleColor(user['role']),
-                  ),
+            child: Center(
+              child: Text(
+                (user['nama'] ?? 'U')[0].toUpperCase(),
+                style: TextStyle(
+                  color: roleColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
                 ),
               ),
             ),
           ),
+          const SizedBox(width: 16),
 
-          // Kolom 3: Aksi (Edit & Hapus)
+          // 2. User Info
           Expanded(
-            flex: 2,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Tombol Edit
-                _actionButton(
-                  icon: Icons.edit_rounded,
-                  color: Colors.blue,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => AddUserPage(user: user),
-                      ),
-                    );
-                  },
+                Text(
+                  user['nama'] ?? 'Tanpa Nama',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Color(0xFF1E293B),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(width: 8),
-                // Tombol Hapus
-                _actionButton(
-                  icon: Icons.delete_outline_rounded,
-                  color: Colors.red,
-                  onTap: () => _confirmDelete(context, supabase, user['id']),
+                const SizedBox(height: 4),
+                Text(
+                  user['email'] ?? '-',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+                // Role Badge
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: roleColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    role.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: roleColor,
+                    ),
+                  ),
                 ),
               ],
             ),
+          ),
+
+          // 3. Action Buttons
+          Column(
+            children: [
+              _actionButton(
+                icon: Icons.edit_rounded,
+                color: Colors.blue.shade50,
+                iconColor: Colors.blue,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AddUserPage(user: user),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              _actionButton(
+                icon: Icons.delete_outline_rounded,
+                color: Colors.red.shade50,
+                iconColor: Colors.red,
+                onTap: () => _confirmDelete(context, supabase, user['id']),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // Helper Tombol Kecil
+  // --- HELPER WIDGETS ---
+
   Widget _actionButton({
     required IconData icon,
     required Color color,
+    required Color iconColor,
     required VoidCallback onTap,
   }) {
-    return InkWell(
+    return GestureDetector(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.all(6),
+        padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
+          color: color,
+          borderRadius: BorderRadius.circular(10),
         ),
-        child: Icon(icon, size: 16, color: color),
+        child: Icon(icon, size: 18, color: iconColor),
       ),
     );
   }
 
-  // Logika Warna Badge Role
-  Color _getRoleColor(String? role) {
-    switch (role) {
-      case 'admin':
-        return Colors.blue[700]!;
-      case 'petugas':
-        return Colors.green[600]!;
-      case 'peminjam':
-        return Colors.orange[700]!;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  // Tampilan Kosong
   Widget _buildEmptyState() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.person_off_rounded, size: 60, color: Colors.grey[300]),
-          const SizedBox(height: 10),
-          Text("Belum ada user", style: TextStyle(color: Colors.grey[400])),
+          Icon(Icons.people_outline_rounded,
+              size: 80, color: Colors.grey.shade300),
+          const SizedBox(height: 16),
+          Text(
+            "Belum ada data user",
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
+          ),
         ],
       ),
     );
   }
 
-  // Fungsi Konfirmasi Hapus
+  Color _getRoleColor(String? role) {
+    switch (role) {
+      case 'admin':
+        return const Color(0xFF1565C0); // Blue
+      case 'petugas':
+        return const Color(0xFF2E7D32); // Green
+      case 'peminjam':
+        return const Color(0xFFE65100); // Orange
+      default:
+        return Colors.grey;
+    }
+  }
+
+  // --- LOGIC: DELETE USER ---
   Future<void> _confirmDelete(
     BuildContext context,
     SupabaseClient supabase,
@@ -992,9 +935,10 @@ class UserManagementPage extends StatelessWidget {
     bool? confirm = await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Hapus User?"),
-        content: const Text("Data user akan dihapus permanen."),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        content: const Text(
+            "Akun ini akan dihapus secara permanen dan tidak bisa dikembalikan."),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -1003,10 +947,11 @@ class UserManagementPage extends StatelessWidget {
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Hapus"),
+            child: const Text("Hapus", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -1015,6 +960,17 @@ class UserManagementPage extends StatelessWidget {
     if (confirm == true) {
       try {
         await supabase.from('user').delete().eq('id', id);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text("User berhasil dihapus"),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          );
+        }
       } catch (e) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

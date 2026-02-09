@@ -4,8 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class EditProdukPage extends StatefulWidget {
-  final Map<String, dynamic> item; // Menerima data produk yang akan diedit
-
+  final Map<String, dynamic> item;
   const EditProdukPage({super.key, required this.item});
 
   @override
@@ -13,32 +12,134 @@ class EditProdukPage extends StatefulWidget {
 }
 
 class _EditProdukPageState extends State<EditProdukPage> {
-  late TextEditingController _namaController;
-  late TextEditingController _stokController;
+  final _namaController = TextEditingController();
+  final _stokController = TextEditingController();
   String? _selectedKategori;
   
-  final List<String> _kategoriList = [
-    'Kamera',
-    'Laptop',
-    'Lensa',
-    'Audio',
-    'Lainnya',
+  // Hapus 'final' agar list bisa ditambah secara dinamis
+  List<String> _kategoriList = [
+    "Keyboard",
+    "Mouse",
+    "Headset",
+    "Monitor",
+    "Lainnya"
   ];
 
   XFile? _pickedFile;
-  Uint8List? _imageBytes;
+  Uint8List? _imageBytes; // Untuk menampung gambar BARU
+  String? _oldImageUrl;   // Untuk menampung URL gambar LAMA
   bool _isLoading = false;
   final supabase = Supabase.instance.client;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill data dari produk yang dipilih
-    _namaController = TextEditingController(text: widget.item['nama_alat']);
-    _stokController = TextEditingController(text: widget.item['stok'].toString());
-    _selectedKategori = widget.item['kategori'];
+    _loadExistingData();
+    _fetchCategoriesFromDB(); // Ambil kategori terbaru dari DB
   }
 
+  // --- LOGIKA LOAD DATA ---
+  void _loadExistingData() {
+    _namaController.text = widget.item['nama_alat'] ?? '';
+    _stokController.text = (widget.item['stok'] ?? 0).toString();
+    _oldImageUrl = widget.item['image_url'];
+
+    // Validasi kategori agar sesuai dropdown
+    String existingKategori = widget.item['kategori'] ?? 'Lainnya';
+    
+    // Jika kategori tidak ada di list default, tambahkan sementara
+    if (!_kategoriList.contains(existingKategori)) {
+      _kategoriList.add(existingKategori);
+    }
+    _selectedKategori = existingKategori;
+  }
+
+  // Ambil kategori dari database agar sinkron
+  Future<void> _fetchCategoriesFromDB() async {
+    try {
+      final response = await supabase.from('kategori').select('nama_kategori');
+      if (mounted) {
+        setState(() {
+          for (var item in response) {
+            String catName = item['nama_kategori'];
+            if (!_kategoriList.contains(catName)) {
+              _kategoriList.add(catName);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      // Abaikan jika error / tabel belum ada
+    }
+  }
+
+  // --- LOGIKA TAMBAH KATEGORI BARU ---
+  Future<void> _addNewCategory(String categoryName) async {
+    if (categoryName.isEmpty) return;
+
+    try {
+      // 1. Simpan ke Database Supabase
+      await supabase.from('kategori').insert({'nama_kategori': categoryName});
+
+      // 2. Update List Lokal & Langsung Pilih
+      setState(() {
+        _kategoriList.add(categoryName);
+        _selectedKategori = categoryName; // Otomatis pilih kategori baru
+      });
+
+      if (mounted) {
+        Navigator.pop(context); // Tutup Dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Kategori baru ditambahkan!"), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Gagal: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _showAddCategoryDialog() {
+    final TextEditingController catController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Tambah Kategori", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: catController,
+          decoration: InputDecoration(
+            hintText: "Nama Kategori Baru...",
+            filled: true,
+            fillColor: Colors.grey[100],
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Batal", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => _addNewCategory(catController.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1565C0),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text("Simpan", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- LOGIKA GAMBAR & UPDATE ---
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
@@ -56,9 +157,9 @@ class _EditProdukPageState extends State<EditProdukPage> {
   }
 
   Future<void> _updateProduct() async {
-    if (_namaController.text.isEmpty || _stokController.text.isEmpty || _selectedKategori == null) {
+    if (_namaController.text.isEmpty || _selectedKategori == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Harap isi semua bidang!")),
+        const SnackBar(content: Text("Nama dan Kategori wajib diisi!")),
       );
       return;
     }
@@ -66,37 +167,46 @@ class _EditProdukPageState extends State<EditProdukPage> {
     setState(() => _isLoading = true);
 
     try {
-      String? imageUrl = widget.item['image_url']; // Gunakan URL lama secara default
+      String? finalImageUrl = _oldImageUrl;
 
-      // Jika ada gambar baru yang dipilih, upload ulang
+      // 1. Cek apakah ada gambar BARU yang dipilih
       if (_imageBytes != null) {
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
-        await supabase.storage.from('produk').uploadBinary(
+        final fileName = 'update_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        
+        // Upload gambar baru
+        await supabase.storage.from('alat_images').uploadBinary(
               fileName,
               _imageBytes!,
-              fileOptions: const FileOptions(contentType: 'image/jpeg'),
+              fileOptions: const FileOptions(
+                upsert: true,
+                contentType: 'image/jpeg',
+              ),
             );
-        imageUrl = supabase.storage.from('produk').getPublicUrl(fileName);
+
+        // Dapatkan URL baru
+        finalImageUrl = supabase.storage
+            .from('alat_images')
+            .getPublicUrl(fileName);
       }
 
-      // Update data di tabel 'alat'
+      // 2. Update Database Supabase
       await supabase.from('alat').update({
         'nama_alat': _namaController.text.trim(),
-        'stok': int.parse(_stokController.text.trim()),
         'kategori': _selectedKategori,
-        'image_url': imageUrl,
+        'stok': int.tryParse(_stokController.text) ?? 0,
+        'image_url': finalImageUrl, 
       }).eq('id', widget.item['id']);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Produk berhasil diperbarui!")),
+          const SnackBar(content: Text("Data berhasil diperbarui!")),
         );
-        Navigator.pop(context, true); // Kembali dengan nilai true untuk refresh data
+        Navigator.pop(context, true); // Kembali dengan sinyal sukses
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Gagal memperbarui: $e")),
+          SnackBar(content: Text("Gagal update: $e")),
         );
       }
     } finally {
@@ -107,142 +217,289 @@ class _EditProdukPageState extends State<EditProdukPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: const Color(0xFF1565C0), 
       appBar: AppBar(
-        title: const Text("Edit Produk", style: TextStyle(color: Colors.black87, fontSize: 18, fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black87, size: 20),
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildImagePicker(),
-            const SizedBox(height: 24),
-            _buildTextField("Nama Produk", _namaController, "Contoh: Kamera Sony A7III"),
-            const SizedBox(height: 16),
-            _buildTextField("Stok", _stokController, "Jumlah barang", isNumber: true),
-            const SizedBox(height: 16),
-            _buildDropdown(),
-            const SizedBox(height: 32),
-            _buildSubmitButton(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildImagePicker() {
-    return Center(
-      child: GestureDetector(
-        onTap: _pickImage,
-        child: Container(
-          width: double.infinity,
-          height: 180,
-          decoration: BoxDecoration(
+        title: const Text(
+          "Edit Produk",
+          style: TextStyle(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
           ),
-          child: _imageBytes != null
-              ? ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.memory(_imageBytes!, fit: BoxFit.cover),
-                )
-              : (widget.item['image_url'] != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Image.network(widget.item['image_url'], fit: BoxFit.cover),
-                    )
-                  : const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.add_a_photo_outlined, size: 40, color: Color(0xFF94A3B8)),
-                        SizedBox(height: 8),
-                        Text("Ubah Foto Produk", style: TextStyle(color: Color(0xFF64748B))),
-                      ],
-                    )),
         ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
       ),
-    );
-  }
+      body: Column(
+        children: [
+          const SizedBox(height: 20),
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(40),
+                  topRight: Radius.circular(40),
+                ),
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 35,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildSectionHeader("FOTO PRODUK"),
+                    const SizedBox(height: 15),
+                    _buildImagePicker(),
+                    const SizedBox(height: 30),
+                    _buildFieldLabel("Nama Barang"),
+                    _buildTextField(_namaController, "Edit Nama Barang"),
+                    const SizedBox(height: 20),
+                    _buildFieldLabel("Jumlah Stok"),
+                    _buildTextField(
+                      _stokController,
+                      "Edit Stok",
+                      isNumber: true,
+                    ),
+                    const SizedBox(height: 20),
+                    _buildFieldLabel("Kategori"),
+                    
+                    // --- MODIFIKASI: DROPDOWN + TOMBOL TAMBAH ---
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildDropdownField(),
+                        ),
+                        const SizedBox(width: 10),
+                        InkWell(
+                          onTap: _showAddCategoryDialog,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            height: 50, // Tinggi disamakan dengan field
+                            width: 50,
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade700,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.orange.withOpacity(0.3),
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 3),
+                                )
+                              ],
+                            ),
+                            child: const Icon(Icons.add, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // -------------------------------------------
 
-  Widget _buildTextField(String label, TextEditingController controller, String hint, {bool isNumber = false}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF334155))),
-        const SizedBox(height: 8),
-        Container(
-          decoration: _inputBoxDecoration(),
-          child: TextField(
-            controller: controller,
-            keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-            decoration: _inputDecoration(hint),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDropdown() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text("Kategori", style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF334155))),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: _inputBoxDecoration(),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _selectedKategori,
-              isExpanded: true,
-              hint: const Text("Pilih Kategori", style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8))),
-              items: _kategoriList.map((String val) {
-                return DropdownMenuItem<String>(value: val, child: Text(val, style: const TextStyle(fontSize: 14)));
-              }).toList(),
-              onChanged: (value) => setState(() => _selectedKategori = value),
+                    const SizedBox(height: 40),
+                    _buildSubmitButton(),
+                  ],
+                ),
+              ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGET LOGIKA GAMBAR ---
+  Widget _buildImagePicker() {
+    ImageProvider? imageProvider;
+
+    if (_imageBytes != null) {
+      imageProvider = MemoryImage(_imageBytes!);
+    } else if (_oldImageUrl != null && _oldImageUrl!.isNotEmpty) {
+      imageProvider = NetworkImage(_oldImageUrl!);
+    }
+
+    return GestureDetector(
+      onTap: _pickImage,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            height: 180,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4A78D0),
+              borderRadius: BorderRadius.circular(20),
+              image: imageProvider != null
+                  ? DecorationImage(
+                      image: imageProvider,
+                      fit: BoxFit.cover,
+                    )
+                  : null,
+            ),
+            child: imageProvider == null
+                ? const Center(
+                    child: Icon(Icons.image, size: 80, color: Colors.white),
+                  )
+                : null,
+          ),
+          Positioned(
+            bottom: -6,
+            right: -6,
+            child: Container(
+              height: 36,
+              width: 36,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 4,
+                    offset: Offset(0, 2),
+                  )
+                ],
+              ),
+              child: const Icon(Icons.edit, color: Color(0xFF4A78D0), size: 20),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- HELPER WIDGETS ---
+
+  Widget _buildSectionHeader(String title) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1565C0),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFF1E293B),
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+            letterSpacing: 1.0,
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildFieldLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          color: Color(0xFF64748B),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField(
+    TextEditingController controller,
+    String hint, {
+    bool isNumber = false,
+  }) {
+    return Container(
+      decoration: _inputBoxDecoration(),
+      child: TextField(
+        controller: controller,
+        keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+        decoration: _inputDecoration(hint),
+      ),
+    );
+  }
+
+  Widget _buildDropdownField() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: _inputBoxDecoration(),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedKategori,
+          hint: const Text(
+            "Pilih Kategori",
+            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+          ),
+          icon: const Icon(Icons.expand_more),
+          isExpanded: true,
+          items: _kategoriList
+              .map(
+                (val) => DropdownMenuItem(
+                  value: val,
+                  child: Text(val, style: const TextStyle(fontSize: 13)),
+                ),
+              )
+              .toList(),
+          onChanged: (value) => setState(() => _selectedKategori = value),
+        ),
+      ),
     );
   }
 
   Widget _buildSubmitButton() {
     return SizedBox(
       width: double.infinity,
-      height: 50,
+      height: 48,
       child: ElevatedButton(
         onPressed: _isLoading ? null : _updateProduct,
         style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF1565C0),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: const Color(0xFF4A78D0),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           elevation: 0,
         ),
         child: _isLoading
             ? const CircularProgressIndicator(color: Colors.white)
-            : const Text("Simpan Perubahan", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            : const Text(
+                "Simpan Perubahan",
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: Colors.white,
+                ),
+              ),
       ),
     );
   }
 
   BoxDecoration _inputBoxDecoration() => BoxDecoration(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
-  );
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
+      );
 
   InputDecoration _inputDecoration(String hint) => InputDecoration(
-    hintText: hint,
-    hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-    border: InputBorder.none,
-  );
+        hintText: hint,
+        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        filled: true,
+        fillColor: Colors.white,
+      );
 }
