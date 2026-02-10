@@ -3,6 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'login.dart';
 import 'persetujuan_peminjaman.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 // ===============================
 // DASHBOARD PETUGAS (UTAMA)
@@ -702,26 +705,337 @@ class _PengembalianPageState extends State<PengembalianPage> {
 // ===============================
 // HALAMAN LAPORAN
 // ===============================
-class LaporanPetugasPage extends StatelessWidget {
+class LaporanPetugasPage extends StatefulWidget {
   const LaporanPetugasPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return _BasePage(
-      title: "Laporan",
-      child: Center(
-        child: ElevatedButton.icon(
-          icon: const Icon(Icons.print),
-          label: const Text("Cetak Laporan"),
-          onPressed: () {
-            // TODO: export PDF / Excel
-          },
+  State<LaporanPetugasPage> createState() => _LaporanPetugasPageState();
+}
+
+class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
+  final supabase = Supabase.instance.client;
+  List<Map<String, dynamic>> _laporanList = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLaporan();
+  }
+
+  // --- 1. MENGAMBIL DATA DARI SUPABASE ---
+ Future<void> _fetchLaporan() async {
+    try {
+      // PERBAIKAN:
+      // 1. Ubah 'user:user_id(...)' menjadi 'user:user!fk_peminjaman_user(...)'
+      // 2. Pastikan 'alat' juga menggunakan foreign key yang spesifik agar aman
+      
+      final response = await supabase
+          .from('peminjaman')
+          .select('''
+            *,
+            user:user!fk_peminjaman_user(nama, email),
+            alat:alat!fk_peminjaman_alat(nama_alat, image_url),
+            pengembalian(tgl_kembali_aktual, denda)
+          ''')
+          .order('tanggal_pinjam', ascending: false);
+
+      // Filter di sisi klien: hanya yang statusnya 'dikembalikan' atau 'selesai'
+      final dataFiltered = (response as List).where((item) {
+        final status = item['status']?.toString().toLowerCase();
+        return status == 'dikembalikan' || status == 'selesai';
+      }).toList();
+
+      setState(() {
+        _laporanList = dataFiltered.cast<Map<String, dynamic>>();
+        _isLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Error fetching laporan: $e');
+      setState(() => _isLoading = false);
+      
+      // Opsional: Tampilkan snackbar jika error, agar kita tahu di layar HP
+      if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Gagal load data: ${e.toString()}')),
+         );
+      }
+    }
+  }
+  // --- 2. LOGIKA PEMBUATAN PDF ---
+  Future<void> _cetakPdf() async {
+    final doc = pw.Document();
+    
+    // Load font regular (opsional, default font PDF kadang tidak support simbol Rp)
+    final font = await PdfGoogleFonts.nunitoExtraLight();
+
+    // Persiapkan data gambar untuk PDF (network image harus didownload dulu)
+    // Kita lakukan ini agar proses build PDF tidak terlalu berat di UI thread
+    
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
+        build: (pw.Context context) {
+          return [
+            _buildPdfHeader(),
+            pw.SizedBox(height: 20),
+            _buildPdfTable(),
+          ];
+        },
+      ),
+    );
+
+    // Buka preview PDF / Print Dialog
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => doc.save(),
+    );
+  }
+
+  pw.Widget _buildPdfHeader() {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          "LAPORAN PEMINJAMAN & PENGEMBALIAN BARANG",
+          style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
         ),
+        pw.Text(
+          "Dicetak pada: ${DateFormat('dd MMMM yyyy HH:mm').format(DateTime.now())}",
+          style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+        ),
+        pw.Divider(),
+      ],
+    );
+  }
+
+  pw.Widget _buildPdfTable() {
+    return pw.TableHelper.fromTextArray(
+      headers: ['No', 'Barang', 'Peminjam', 'Tgl Pinjam', 'Tgl Kembali', 'Denda'],
+      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+      headerDecoration: const pw.BoxDecoration(color: PdfColors.blue700),
+      rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300))),
+      cellAlignment: pw.Alignment.centerLeft,
+      cellPadding: const pw.EdgeInsets.all(5),
+      data: List<List<dynamic>>.generate(_laporanList.length, (index) {
+        final item = _laporanList[index];
+        final alat = item['alat'] ?? {};
+        final user = item['user'] ?? {};
+        
+        // Ambil data pengembalian (karena array, ambil yg pertama atau sesuai logika db)
+        final pengembalianData = (item['pengembalian'] as List?)?.isNotEmpty == true 
+            ? item['pengembalian'][0] 
+            : null;
+            
+        final tglPinjam = DateFormat('dd/MM/yy').format(DateTime.parse(item['tanggal_pinjam']));
+        
+        // Tgl kembali aktual
+        String tglKembali = '-';
+        if (pengembalianData != null && pengembalianData['tgl_kembali_aktual'] != null) {
+          tglKembali = DateFormat('dd/MM/yy').format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
+        } else if (item['updated_at'] != null) {
+             tglKembali = DateFormat('dd/MM/yy').format(DateTime.parse(item['updated_at']));
+        }
+
+        // Denda
+        final dendaVal = pengembalianData != null ? (pengembalianData['denda'] ?? 0) : (item['denda'] ?? 0);
+        final dendaStr = dendaVal > 0 
+            ? NumberFormat.currency(locale: 'id', symbol: 'Rp ', decimalDigits: 0).format(dendaVal)
+            : '-';
+
+        return [
+          '${index + 1}',
+          alat['nama_alat'] ?? '-',
+          user['nama'] ?? '-',
+          tglPinjam,
+          tglKembali,
+          dendaStr
+        ];
+      }),
+    );
+  }
+
+  // --- 3. TAMPILAN UI (LAYAR) ---
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        title: const Text("Laporan Transaksi", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _laporanList.isEmpty ? null : _cetakPdf,
+        icon: const Icon(Icons.print),
+        label: const Text("Cetak PDF"),
+        backgroundColor: const Color(0xFF1E88E5),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _laporanList.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.folder_off_outlined, size: 60, color: Colors.grey[400]),
+                      const SizedBox(height: 10),
+                      Text("Belum ada data laporan", style: TextStyle(color: Colors.grey[600])),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _laporanList.length,
+                  itemBuilder: (context, index) {
+                    return _buildReportCard(_laporanList[index]);
+                  },
+                ),
+    );
+  }
+
+  Widget _buildReportCard(Map<String, dynamic> item) {
+    final alat = item['alat'] ?? {};
+    final user = item['user'] ?? {};
+    
+    // Ambil data pengembalian untuk denda & tanggal aktual
+    final pengembalianList = item['pengembalian'] as List?;
+    final pengembalianData = (pengembalianList != null && pengembalianList.isNotEmpty) 
+        ? pengembalianList[0] 
+        : null;
+
+    final tglPinjam = DateFormat('dd MMM yyyy').format(DateTime.parse(item['tanggal_pinjam']));
+    
+    String tglKembali = '-';
+    if (pengembalianData != null && pengembalianData['tgl_kembali_aktual'] != null) {
+      tglKembali = DateFormat('dd MMM yyyy').format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
+    } else if (item['status'] == 'dikembalikan') {
+      // Fallback jika data pengembalian belum tersync tapi status sudah berubah
+       tglKembali = DateFormat('dd MMM yyyy').format(DateTime.parse(item['updated_at'] ?? DateTime.now().toIso8601String()));
+    }
+
+    final int denda = pengembalianData != null ? (pengembalianData['denda'] ?? 0) : (item['denda'] ?? 0);
+    final bool kenaDenda = denda > 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Header: User & Status Denda
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.blue.shade50,
+                  child: Text((user['nama'] ?? 'U')[0].toUpperCase(), 
+                      style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    user['nama'] ?? 'Tanpa Nama',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                ),
+                if (kenaDenda)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red.shade100),
+                    ),
+                    child: Text(
+                      "Denda: ${NumberFormat.compactCurrency(locale: 'id', symbol: 'Rp', decimalDigits: 0).format(denda)}",
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red.shade700),
+                    ),
+                  )
+                else
+                   Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      "Tepat Waktu",
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green.shade700),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // Body: Barang & Tanggal
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Gambar Produk
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 70, height: 70,
+                    color: Colors.grey.shade100,
+                    child: alat['image_url'] != null
+                        ? Image.network(alat['image_url'], fit: BoxFit.cover,
+                            errorBuilder: (c, e, s) => const Icon(Icons.image, color: Colors.grey))
+                        : const Icon(Icons.inventory_2, color: Colors.blueGrey),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Detail
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        alat['nama_alat'] ?? 'Nama Alat',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF2D3748)),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _dateBadge("Pinjam", tglPinjam, Colors.blue),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.arrow_forward, size: 14, color: Colors.grey),
+                          const SizedBox(width: 8),
+                          _dateBadge("Kembali", tglKembali, Colors.orange),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
-}
 
+  Widget _dateBadge(String label, String date, MaterialColor color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+        const SizedBox(height: 2),
+        Text(date, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color.shade800)),
+      ],
+    );
+  }
+}
 // ===============================
 // HALAMAN PENGATURAN + LOGOUT
 // ===============================
