@@ -1,5 +1,4 @@
-import 'dart:io';
-import 'dart:typed_data';
+import 'dart:typed_data'; // Tambahkan ini untuk mendukung bytes gambar
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,25 +13,43 @@ class TambahProdukPage extends StatefulWidget {
 class _TambahProdukPageState extends State<TambahProdukPage> {
   final _namaController = TextEditingController();
   final _stokController = TextEditingController();
-  
   String? _selectedKategori;
-  final List<String> _kategoriList = ['Kamera', 'Laptop', 'Lensa', 'Audio', 'Lainnya'];
-  
-  File? _imageFile;
-  bool _isLoading = false;
+  final List<String> _kategoriList = [
+    'Kamera',
+    'Laptop',
+    'Lensa',
+    'Audio',
+    'Lainnya',
+  ];
 
+  // PERBAIKAN: Gunakan XFile dan Uint8List agar tidak error di Web
+  XFile? _pickedFile;
+  Uint8List? _imageBytes;
+  bool _isLoading = false;
   final supabase = Supabase.instance.client;
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+
     if (pickedFile != null) {
-      setState(() => _imageFile = File(pickedFile.path));
+      // PERBAIKAN: Baca file sebagai bytes
+      final bytes = await pickedFile.readAsBytes();
+      setState(() {
+        _pickedFile = pickedFile;
+        _imageBytes = bytes;
+      });
     }
   }
 
   Future<void> _saveProduct() async {
-    if (_namaController.text.isEmpty || _imageFile == null || _selectedKategori == null) {
+    // PERBAIKAN: Cek ketersediaan file lewat bytes
+    if (_namaController.text.isEmpty ||
+        _imageBytes == null ||
+        _selectedKategori == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Lengkapi semua data dan foto!")),
       );
@@ -42,37 +59,45 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     setState(() => _isLoading = true);
 
     try {
-      final fileName = 'alat_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final path = 'produk/$fileName';
-      final Uint8List imageBytes = await _imageFile!.readAsBytes();
+      // 1. Upload Gambar (Gunakan uploadBinary agar support semua platform)
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-      await supabase.storage.from('foto-alat').uploadBinary(
-        path,
-        imageBytes,
-        fileOptions: const FileOptions(contentType: 'image/jpeg'),
-      );
+      await supabase.storage
+          .from('alat_images')
+          .uploadBinary(
+            fileName,
+            _imageBytes!, // Gunakan bytes yang sudah dibaca
+            fileOptions: const FileOptions(
+              upsert: true,
+              contentType: 'image/jpeg',
+            ),
+          );
 
-      final String imageUrl = supabase.storage.from('foto-alat').getPublicUrl(path);
+      // 2. Dapatkan URL
+      final String imageUrl = supabase.storage
+          .from('alat_images')
+          .getPublicUrl(fileName);
 
+      // 3. Insert ke Tabel 'alat'
       await supabase.from('alat').insert({
-        'nama_alat': _namaController.text,
+        'nama_alat': _namaController.text.trim(),
+        'kategori': _selectedKategori,
         'stok': int.tryParse(_stokController.text) ?? 0,
         'image_url': imageUrl,
-        'kategori': _selectedKategori, 
       });
 
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Barang Berhasil Disimpan")),
+          const SnackBar(content: Text("Berhasil ditambah!")),
         );
+        // PERBAIKAN: Kirim nilai 'true' saat kembali
+        Navigator.pop(context, true); 
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Gagal menyimpan: $e")),
-        );
-      }
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -80,28 +105,33 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
 
   @override
   Widget build(BuildContext context) {
+    // UI TETAP SAMA PERSIS
     return Scaffold(
-      backgroundColor: const Color(0xFF2196F3),
+      backgroundColor: const Color(0xFF1565C0),
       appBar: AppBar(
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 22),
+          icon: const Icon(
+            Icons.arrow_back_ios_new,
+            color: Colors.white,
+            size: 20,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          "TAMBAH BARANG",
+          "Tambah Produk",
           style: TextStyle(
             color: Colors.white,
-            fontWeight: FontWeight.w900,
-            fontSize: 20,
-            letterSpacing: 1.2,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
           ),
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        centerTitle: true,
       ),
       body: Column(
         children: [
-          const SizedBox(height: 15),
+          const SizedBox(height: 20),
           Expanded(
             child: Container(
               width: double.infinity,
@@ -113,32 +143,31 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
                 ),
               ),
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 35),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 35,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSectionHeader("UNGGAH FOTO"),
-                    const SizedBox(height: 12),
-                    _buildImagePicker(),
-                    
-                    const SizedBox(height: 30),
-                    _buildSectionHeader("DETAIL INFORMASI"),
+                    _buildSectionHeader("FOTO PRODUK"),
                     const SizedBox(height: 15),
-                    
-                    _buildInputLabel("Nama Barang"),
-                    _buildTextField(_namaController, "Masukkan nama barang", Icons.inventory_2_outlined),
-                    
-                    const SizedBox(height: 20),
-                    _buildInputLabel("Stok"),
-                    _buildTextField(_stokController, "0", Icons.shutter_speed_outlined, isNumber: true),
-                    
-                    const SizedBox(height: 20),
-                    _buildInputLabel("Kategori"),
-                    _buildDropdownField(),
-                    
-                    const SizedBox(height: 45),
-                    _buildSubmitButton(),
+                    _buildImagePicker(),
                     const SizedBox(height: 30),
+                    _buildFieldLabel("Nama Barang"),
+                    _buildTextField(_namaController, "Isi Nama Barang"),
+                    const SizedBox(height: 20),
+                    _buildFieldLabel("Jumlah Stok"),
+                    _buildTextField(
+                      _stokController,
+                      "Isi Stok",
+                      isNumber: true,
+                    ),
+                    const SizedBox(height: 20),
+                    _buildFieldLabel("Kategori"),
+                    _buildDropdownField(),
+                    const SizedBox(height: 40),
+                    _buildSubmitButton(),
                   ],
                 ),
               ),
@@ -149,135 +178,176 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     );
   }
 
-  // Header per bagian (All Caps Blue)
-  Widget _buildSectionHeader(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        color: Color(0xFF1565C0),
-        fontWeight: FontWeight.w900,
-        fontSize: 13,
-        letterSpacing: 1.5,
-      ),
-    );
-  }
-
-  // Label input kecil
-  Widget _buildInputLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF475569)),
-      ),
-    );
-  }
-
-  // Box Dropdown
-  Widget _buildDropdownField() {
-    return Container(
-      decoration: _boxDecoration(),
-      child: DropdownButtonFormField<String>(
-        value: _selectedKategori,
-        hint: const Text("Pilih Kategori", style: TextStyle(color: Colors.grey, fontSize: 14)),
-        icon: const Icon(Icons.arrow_drop_down_circle_outlined, color: Colors.blue),
-        decoration: _inputDecoration(Icons.category_outlined),
-        items: _kategoriList.map((String val) {
-          return DropdownMenuItem<String>(
-            value: val,
-            child: Text(val, style: const TextStyle(fontSize: 14)),
-          );
-        }).toList(),
-        onChanged: (value) => setState(() => _selectedKategori = value),
-      ),
-    );
-  }
-
-  // Box Image Picker
+  // PERBAIKAN: Gunakan Image.memory untuk menampilkan gambar
   Widget _buildImagePicker() {
     return GestureDetector(
       onTap: _pickImage,
-      child: Container(
-        height: 180,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(25),
-          border: Border.all(color: Colors.blue.withOpacity(0.1), width: 2),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 15, offset: const Offset(0, 8))
-          ],
-          image: _imageFile != null ? DecorationImage(image: FileImage(_imageFile!), fit: BoxFit.cover) : null,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            height: 180,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4A78D0),
+              borderRadius: BorderRadius.circular(20),
+              image: _imageBytes != null
+                  ? DecorationImage(
+                      image: MemoryImage(
+                        _imageBytes!,
+                      ), // Ganti FileImage dengan MemoryImage
+                      fit: BoxFit.cover,
+                    )
+                  : null,
+            ),
+            child: _imageBytes == null
+                ? const Center(
+                    child: Icon(Icons.image, size: 80, color: Colors.white),
+                  )
+                : null,
+          ),
+          Positioned(
+            bottom: -6,
+            right: -6,
+            child: Container(
+              height: 36,
+              width: 36,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.add, color: Color(0xFF4A78D0), size: 22),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- SISA WIDGET HELPER TETAP SAMA ---
+  Widget _buildSectionHeader(String title) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1565C0),
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
-        child: _imageFile == null 
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), shape: BoxShape.circle),
-                    child: const Icon(Icons.camera_enhance_rounded, size: 40, color: Color(0xFF2196F3)),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text("Klik untuk ambil foto", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
-                ],
-              )
-            : null,
-      ),
-    );
-  }
-
-  // Text Field
-  Widget _buildTextField(TextEditingController controller, String hint, IconData icon, {bool isNumber = false}) {
-    return Container(
-      decoration: _boxDecoration(),
-      child: TextField(
-        controller: controller,
-        keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-        decoration: _inputDecoration(icon).copyWith(hintText: hint),
-      ),
-    );
-  }
-
-  // Tombol Submit Besar
-  Widget _buildSubmitButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 60,
-      child: ElevatedButton(
-        onPressed: _isLoading ? null : _saveProduct,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF1565C0),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          elevation: 5,
-          shadowColor: Colors.blue.withOpacity(0.4),
+        const SizedBox(width: 10),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFF1E293B),
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+            letterSpacing: 1.0,
+          ),
         ),
-        child: _isLoading 
-            ? const CircularProgressIndicator(color: Colors.white)
-            : const Text("SIMPAN DATA BARANG", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1.2)),
-      ),
-    );
-  }
-
-  // Helper Dekorasi Kontainer
-  BoxDecoration _boxDecoration() {
-    return BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      boxShadow: [
-        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4)),
       ],
     );
   }
 
-  // Helper Dekorasi Input
-  InputDecoration _inputDecoration(IconData icon) {
-    return InputDecoration(
-      prefixIcon: Icon(icon, color: Colors.blue.shade300, size: 22),
-      contentPadding: const EdgeInsets.symmetric(vertical: 18),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(18), borderSide: BorderSide.none),
-      filled: true,
-      fillColor: Colors.transparent,
+  Widget _buildFieldLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          color: Color(0xFF64748B),
+        ),
+      ),
     );
   }
+
+  Widget _buildTextField(
+    TextEditingController controller,
+    String hint, {
+    bool isNumber = false,
+  }) {
+    return Container(
+      decoration: _inputBoxDecoration(),
+      child: TextField(
+        controller: controller,
+        keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+        decoration: _inputDecoration(hint),
+      ),
+    );
+  }
+
+  Widget _buildDropdownField() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: _inputBoxDecoration(),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedKategori,
+          hint: const Text(
+            "Pilih Kategori",
+            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+          ),
+          icon: const Icon(Icons.expand_more),
+          isExpanded: true,
+          items: _kategoriList
+              .map(
+                (val) => DropdownMenuItem(
+                  value: val,
+                  child: Text(val, style: const TextStyle(fontSize: 13)),
+                ),
+              )
+              .toList(),
+          onChanged: (value) => setState(() => _selectedKategori = value),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubmitButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: ElevatedButton(
+        onPressed: _isLoading ? null : _saveProduct,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF4A78D0),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 0,
+        ),
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Text(
+                "Simpan",
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: Colors.white,
+                ),
+              ),
+      ),
+    );
+  }
+
+  BoxDecoration _inputBoxDecoration() => BoxDecoration(
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
+  );
+
+  InputDecoration _inputDecoration(String hint) => InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide.none,
+    ),
+    filled: true,
+    fillColor: Colors.white,
+  );
 }

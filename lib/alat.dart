@@ -1,22 +1,24 @@
 class Alat {
   final int id;
   final String namaAlat;
-  final int? kategoriId;
+  final String? kategori;
+  final String? imageUrl;
   final int stok;
 
   Alat({
     required this.id,
     required this.namaAlat,
-    this.kategoriId,
+    this.kategori,
+    this.imageUrl,
     required this.stok,
   });
 
-  // Konversi dari Map Supabase ke Objek Dart
   factory Alat.fromMap(Map<String, dynamic> map) {
     return Alat(
       id: map['id'],
-      namaAlat: map['nama_alat'],
-      kategoriId: map['kategori_id'],
+      namaAlat: map['nama_alat'] ?? '',
+      kategori: map['kategori'],
+      imageUrl: map['image_url'],
       stok: map['stok'] ?? 0,
     );
   }

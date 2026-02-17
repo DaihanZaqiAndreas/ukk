@@ -40,7 +40,8 @@ class HomeScreen extends StatelessWidget {
                       await service.addPeminjaman(user['id'], alat.id);
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                            content: Text('Peminjaman berhasil diajukan!')),
+                          content: Text('Peminjaman berhasil diajukan!'),
+                        ),
                       );
                     },
                     child: const Text('Pinjam'),

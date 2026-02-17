@@ -18,6 +18,7 @@ class _LoginPageState extends State<LoginPage> {
   String? _errorText;
 
   Future<void> _handleLogin() async {
+    // 1. Validasi Input (Tetap sama)
     if (_emailController.text.trim().isEmpty ||
         _passwordController.text.trim().isEmpty) {
       setState(() => _errorText = "Isi email atau sandi terlebih dahulu!");
@@ -30,35 +31,39 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      // 1. Login ke Supabase Auth
-      final AuthResponse res =
-          await Supabase.instance.client.auth.signInWithPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+      // 2. Login ke Supabase Auth
+      final AuthResponse res = await Supabase.instance.client.auth
+          .signInWithPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
 
       final user = res.user;
 
       if (user != null) {
-        // 2. Ambil data role dari tabel 'user'
-        // Pastikan nama tabelnya 'user' (sesuai gambar) bukan 'profiles'
+        // 3. Ambil data role dari tabel 'user'
+        // Gunakan .select() tanpa parameter jika ingin ambil semua,
+        // atau .select('role') untuk spesifik kolom role.
         final data = await Supabase.instance.client
             .from('user')
             .select('role')
-            .eq('id',
-                user.id) // user.id dari Auth harus sama dengan id di tabel user
-            .maybeSingle(); // Menggunakan maybeSingle agar tidak error jika data kosong
+            .eq('id', user.id)
+            .maybeSingle();
 
+        // Cek jika data di tabel 'user' tidak ada meskipun auth berhasil
         if (data == null) {
-          setState(() => _errorText = "Data user tidak ditemukan di database.");
+          await Supabase.instance.client.auth
+              .signOut(); // Logout kembali karena data profil tidak ada
+          setState(() => _errorText = "Profil user tidak ditemukan!");
           return;
         }
 
-        String role = data['role'] ?? 'peminjam';
+        String role = data['role']?.toString().toLowerCase() ?? 'peminjam';
 
+        // Pastikan widget masih aktif sebelum melakukan navigasi
         if (!mounted) return;
 
-        // 3. Navigasi berdasarkan Role
+        // 4. Tentukan Halaman Tujuan
         Widget targetPage;
         if (role == 'admin') {
           targetPage = const AdminDashboard();
@@ -68,19 +73,23 @@ class _LoginPageState extends State<LoginPage> {
           targetPage = const PeminjamDashboard();
         }
 
+        // 5. Navigasi
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => targetPage),
         );
       }
     } on AuthException catch (error) {
+      // Menangkap error spesifik dari Supabase (Password salah, user tidak ditemukan, dll)
       setState(() {
-        // Pesan error lebih user-friendly
         _errorText = "Email atau sandi salah!";
       });
     } catch (e) {
-      setState(() => _errorText = "Terjadi kesalahan koneksi");
+      // Menangkap error lainnya (masalah internet, dsb)
+      setState(() => _errorText = "Gagal terhubung ke server");
+      debugPrint("Login Error: $e");
     } finally {
+      // Pastikan loading berhenti baik sukses maupun gagal
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -98,13 +107,16 @@ class _LoginPageState extends State<LoginPage> {
             RichText(
               text: const TextSpan(
                 style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black),
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
                 children: [
                   TextSpan(text: "Pinjam "),
                   TextSpan(
-                      text: "Alat", style: TextStyle(color: Color(0xFF2196F3))),
+                    text: "Alat",
+                    style: TextStyle(color: Color(0xFF2196F3)),
+                  ),
                 ],
               ),
             ),
@@ -116,8 +128,9 @@ class _LoginPageState extends State<LoginPage> {
               decoration: InputDecoration(
                 hintText: "Masukan Email",
                 hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -129,15 +142,18 @@ class _LoginPageState extends State<LoginPage> {
               decoration: InputDecoration(
                 hintText: "Masukan Password",
                 hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
             if (_errorText != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(_errorText!,
-                    style: const TextStyle(color: Colors.red, fontSize: 11)),
+                child: Text(
+                  _errorText!,
+                  style: const TextStyle(color: Colors.red, fontSize: 11),
+                ),
               ),
             const SizedBox(height: 32),
             Align(
@@ -147,9 +163,12 @@ class _LoginPageState extends State<LoginPage> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2196F3),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20)),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -159,12 +178,20 @@ class _LoginPageState extends State<LoginPage> {
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2))
-                        : const Text("Masuk",
-                            style: TextStyle(color: Colors.white)),
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            "Masuk",
+                            style: TextStyle(color: Colors.white),
+                          ),
                     const SizedBox(width: 8),
-                    const Icon(Icons.arrow_forward,
-                        color: Colors.white, size: 16),
+                    const Icon(
+                      Icons.arrow_forward,
+                      color: Colors.white,
+                      size: 16,
+                    ),
                   ],
                 ),
               ),
