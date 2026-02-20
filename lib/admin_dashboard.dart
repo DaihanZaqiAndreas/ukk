@@ -95,39 +95,13 @@ class DashboardHomeContent extends StatelessWidget {
   }
 
   // 2. Fungsi Mengambil Riwayat + Nama Alat (Manual Fetch)
-  Future<List<Map<String, dynamic>>> _getHistoryData() async {
+  Stream<List<Map<String, dynamic>>> _streamRecentHistory() {
     final supabase = Supabase.instance.client;
-    
-    // Ambil 5 peminjaman terakhir
-    final List<dynamic> response = await supabase
+    return supabase
         .from('peminjaman')
-        .select()
+        .stream(primaryKey: ['id'])
         .order('tanggal_pinjam', ascending: false)
-        .limit(5);
-
-    List<Map<String, dynamic>> results = [];
-
-    for (var item in response) {
-      Map<String, dynamic> row = Map<String, dynamic>.from(item);
-      
-      // Ambil Nama Alat Manual (Agar tidak error Join)
-      try {
-        final alat = await supabase
-            .from('alat')
-            .select('nama_alat')
-            .eq('id', item['alat_id'])
-            .single();
-        row['display_nama_alat'] = alat['nama_alat'];
-      } catch (e) {
-        row['display_nama_alat'] = 'Alat #${item['alat_id']}';
-      }
-
-      // Cek kolom jumlah, jika tidak ada default ke 1
-      row['display_jumlah'] = item['jumlah'] ?? 1; 
-
-      results.add(row);
-    }
-    return results;
+        .limit(5); // Ambil 5 data terbaru
   }
 
   @override
@@ -153,7 +127,10 @@ class DashboardHomeContent extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20.0,
+                vertical: 10,
+              ),
               child: GridView.count(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
@@ -162,10 +139,30 @@ class DashboardHomeContent extends StatelessWidget {
                 mainAxisSpacing: 16,
                 childAspectRatio: 1.4,
                 children: [
-                  _buildStatCard("Kategori Alat", "${stats?['totalKategori'] ?? '...'}", const Color(0xFF1565C0), Icons.inventory_2_outlined),
-                  _buildStatCard("Stok Alat", "${stats?['totalStok'] ?? '...'}", const Color(0xFFEF5350), Icons.construction_outlined),
-                  _buildStatCard("Denda", "Rp 0", const Color(0xFF66BB6A), Icons.payments_outlined),
-                  _buildStatCard("Peminjaman", "${stats?['totalPinjam'] ?? '...'}", const Color(0xFFFFA726), Icons.assignment_outlined),
+                  _buildStatCard(
+                    "Kategori Alat",
+                    "${stats?['totalKategori'] ?? '...'}",
+                    const Color(0xFF1565C0),
+                    Icons.inventory_2_outlined,
+                  ),
+                  _buildStatCard(
+                    "Stok Alat",
+                    "${stats?['totalStok'] ?? '...'}",
+                    const Color(0xFFEF5350),
+                    Icons.construction_outlined,
+                  ),
+                  _buildStatCard(
+                    "Denda",
+                    "Rp 0",
+                    const Color(0xFF66BB6A),
+                    Icons.payments_outlined,
+                  ),
+                  _buildStatCard(
+                    "Peminjaman",
+                    "${stats?['totalPinjam'] ?? '...'}",
+                    const Color(0xFFFFA726),
+                    Icons.assignment_outlined,
+                  ),
                 ],
               ),
             ),
@@ -190,9 +187,16 @@ class DashboardHomeContent extends StatelessWidget {
                         children: [
                           const Text(
                             "Riwayat Peminjaman",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1E293B),
+                            ),
                           ),
-                          TextButton(onPressed: () {}, child: const Text("Lihat Semua")),
+                          TextButton(
+                            onPressed: () {},
+                            child: const Text("Lihat Semua"),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -212,20 +216,21 @@ class DashboardHomeContent extends StatelessWidget {
 
   // --- TABEL RIWAYAT YANG SUDAH DIUBAH KOLOMNYA ---
   Widget _buildHistoryTable() {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _getHistoryData(), // Memanggil fungsi manual fetch di atas
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _streamRecentHistory(), // Menggunakan Stream agar auto-update
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Center(child: Text("Tidak ada riwayat."));
+          return const Center(child: Text("Belum ada aktivitas."));
         }
 
         final items = snapshot.data!;
 
         return Container(
+          width: double.infinity,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(15),
@@ -242,75 +247,134 @@ class DashboardHomeContent extends StatelessWidget {
             child: DataTable(
               headingRowColor: WidgetStateProperty.all(Colors.grey[50]),
               horizontalMargin: 20,
-              columnSpacing: 30,
+              columnSpacing: 25,
               columns: const [
-                // KOLOM 1: Ganti User ID -> Nama Alat 
                 DataColumn(
                   label: Text(
                     'ALAT',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
                   ),
                 ),
-                // KOLOM 2: Ganti Alat ID -> Jumlah
                 DataColumn(
                   label: Text(
                     'JUMLAH',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
                   ),
                 ),
-                // KOLOM 3: Tanggal (Tetap)
                 DataColumn(
                   label: Text(
-                    'TGL PINJAM',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                    'TANGGAL',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
                   ),
                 ),
-                // KOLOM 4: Status (Tetap)
                 DataColumn(
                   label: Text(
                     'STATUS',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
                   ),
                 ),
               ],
               rows: items.map((data) {
+                // Format Tanggal
+                final tgl = data['tanggal_pinjam'] != null
+                    ? DateFormat(
+                        'dd/MM HH:mm',
+                      ).format(DateTime.parse(data['tanggal_pinjam']).toLocal())
+                    : '-';
+
+                // Warna Status
+                String status = (data['status'] ?? '-')
+                    .toString()
+                    .toUpperCase();
+                Color statusColor = Colors.grey;
+                Color statusBg = Colors.grey.shade100;
+
+                if (status == 'MENUNGGU') {
+                  statusColor = Colors.orange;
+                  statusBg = Colors.orange.shade50;
+                } else if (status == 'DIPINJAM') {
+                  statusColor = Colors.blue;
+                  statusBg = Colors.blue.shade50;
+                } else if (status == 'DIKEMBALIKAN') {
+                  statusColor = Colors.purple;
+                  statusBg = Colors.purple.shade50;
+                } else if (status == 'SELESAI') {
+                  statusColor = Colors.green;
+                  statusBg = Colors.green.shade50;
+                }
+
                 return DataRow(
                   cells: [
-                    // DATA 1: Menampilkan Nama Alat
+                    // KOLOM 1: Nama Alat (Ambil pakai FutureBuilder kecil)
                     DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 120),
-                        child: Text(
-                          data['display_nama_alat'], 
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      FutureBuilder(
+                        future: Supabase.instance.client
+                            .from('alat')
+                            .select('nama_alat')
+                            .eq('id', data['alat_id'])
+                            .maybeSingle(),
+                        builder: (context, snap) {
+                          if (snap.hasData) {
+                            return ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 100),
+                              child: Text(
+                                snap.data!['nama_alat'] ??
+                                    'ID: ${data['alat_id']}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }
+                          return const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          );
+                        },
                       ),
                     ),
-                    // DATA 2: Menampilkan Jumlah (Default 1 jika null)
-                    DataCell(
-                      Center(child: Text("${data['display_jumlah']}")),
-                    ),
-                    // DATA 3: Tanggal
-                    DataCell(
-                      Text(
-                        DateFormat('dd/MM/yyyy').format(DateTime.parse(data['tanggal_pinjam'])),
-                      ),
-                    ),
-                    // DATA 4: Status Badge
+
+                    // KOLOM 2: Jumlah
+                    DataCell(Center(child: Text("${data['jumlah'] ?? 1}"))),
+
+                    // KOLOM 3: Tanggal
+                    DataCell(Text(tgl)),
+
+                    // KOLOM 4: Status
                     DataCell(
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
-                          color: data['status'] == 'dipinjam' ? Colors.blue[50] : Colors.green[50],
-                          borderRadius: BorderRadius.circular(8),
+                          color: statusBg,
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          data['status'].toString().toUpperCase(),
+                          status,
                           style: TextStyle(
                             fontSize: 10,
-                            color: data['status'] == 'dipinjam' ? Colors.blue : Colors.green,
                             fontWeight: FontWeight.bold,
+                            color: statusColor,
                           ),
                         ),
                       ),
@@ -325,7 +389,12 @@ class DashboardHomeContent extends StatelessWidget {
     );
   }
 
-  Widget _buildStatCard(String title, String value, Color color, IconData icon) {
+  Widget _buildStatCard(
+    String title,
+    String value,
+    Color color,
+    IconData icon,
+  ) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -344,13 +413,17 @@ class DashboardHomeContent extends StatelessWidget {
         children: [
           Icon(icon, color: color, size: 28),
           const Spacer(),
-          Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+          ),
           Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
         ],
       ),
     );
   }
 }
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -703,10 +776,7 @@ class UserManagementPage extends StatelessWidget {
                   SizedBox(height: 8),
                   Text(
                     "Kelola akun admin, petugas, dan peminjam",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                 ],
               ),
@@ -826,8 +896,10 @@ class UserManagementPage extends StatelessWidget {
                 const SizedBox(height: 8),
                 // Role Badge
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: roleColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
@@ -901,8 +973,11 @@ class UserManagementPage extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.people_outline_rounded,
-              size: 80, color: Colors.grey.shade300),
+          Icon(
+            Icons.people_outline_rounded,
+            size: 80,
+            color: Colors.grey.shade300,
+          ),
           const SizedBox(height: 16),
           Text(
             "Belum ada data user",
@@ -938,7 +1013,8 @@ class UserManagementPage extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Hapus User?"),
         content: const Text(
-            "Akun ini akan dihapus secara permanen dan tidak bisa dikembalikan."),
+          "Akun ini akan dihapus secara permanen dan tidak bisa dikembalikan.",
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -948,7 +1024,8 @@ class UserManagementPage extends StatelessWidget {
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text("Hapus", style: TextStyle(color: Colors.white)),
@@ -967,7 +1044,8 @@ class UserManagementPage extends StatelessWidget {
               backgroundColor: Colors.green,
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
           );
         }

@@ -16,7 +16,7 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
   final supabase = Supabase.instance.client;
 
   String? _selectedKategori;
-  
+
   // List kategori dinamis (bukan final lagi)
   List<String> _kategoriList = [];
 
@@ -33,8 +33,11 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
   // --- 1. AMBIL KATEGORI DARI DATABASE ---
   Future<void> _fetchCategories() async {
     try {
-      final response = await supabase.from('kategori').select('nama_kategori').order('nama_kategori');
-      
+      final response = await supabase
+          .from('kategori')
+          .select('nama_kategori')
+          .order('nama_kategori');
+
       if (mounted) {
         setState(() {
           _kategoriList = (response as List)
@@ -62,19 +65,26 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
       // Update UI: Tambah ke list & Langsung Pilih
       setState(() {
         _kategoriList.add(newCategory);
-        _selectedKategori = newCategory; // <--- INI YG MEMBUAT OTOMATIS TERPILIH
+        _selectedKategori =
+            newCategory; // <--- INI YG MEMBUAT OTOMATIS TERPILIH
       });
 
       if (mounted) {
         Navigator.pop(context); // Tutup dialog
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Kategori baru ditambahkan & dipilih!"), backgroundColor: Colors.green),
+          const SnackBar(
+            content: Text("Kategori baru ditambahkan & dipilih!"),
+            backgroundColor: Colors.green,
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Gagal menambah: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text("Gagal menambah: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -87,7 +97,10 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Tambah Kategori", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          "Tambah Kategori",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         content: TextField(
           controller: catController,
           textCapitalization: TextCapitalization.words,
@@ -110,7 +123,9 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
             onPressed: () => _addNewCategory(catController.text.trim()),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF1565C0),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: const Text("Simpan", style: TextStyle(color: Colors.white)),
           ),
@@ -150,7 +165,9 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
     try {
       final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-      await supabase.storage.from('alat_images').uploadBinary(
+      await supabase.storage
+          .from('alat_images')
+          .uploadBinary(
             fileName,
             _imageBytes!,
             fileOptions: const FileOptions(
@@ -172,13 +189,18 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Berhasil ditambah!"), backgroundColor: Colors.green),
+          const SnackBar(
+            content: Text("Berhasil ditambah!"),
+            backgroundColor: Colors.green,
+          ),
         );
-        Navigator.pop(context, true); 
+        Navigator.pop(context, true);
       }
     } catch (e) {
       if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -190,7 +212,11 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
       backgroundColor: const Color(0xFF1565C0),
       appBar: AppBar(
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+          icon: const Icon(
+            Icons.arrow_back_ios_new,
+            color: Colors.white,
+            size: 20,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
@@ -241,13 +267,11 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
                     ),
                     const SizedBox(height: 20),
                     _buildFieldLabel("Kategori"),
-                    
+
                     // --- MODIFIKASI: DROPDOWN + TOMBOL TAMBAH ---
                     Row(
                       children: [
-                        Expanded(
-                          child: _buildDropdownField(),
-                        ),
+                        Expanded(child: _buildDropdownField()),
                         const SizedBox(width: 10),
                         InkWell(
                           onTap: _showAddCategoryDialog,
@@ -263,7 +287,7 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
                                   color: Colors.orange.withOpacity(0.3),
                                   blurRadius: 5,
                                   offset: const Offset(0, 3),
-                                )
+                                ),
                               ],
                             ),
                             child: const Icon(Icons.add, color: Colors.white),
@@ -271,8 +295,8 @@ class _TambahProdukPageState extends State<TambahProdukPage> {
                         ),
                       ],
                     ),
-                    // ------------------------------------------
 
+                    // ------------------------------------------
                     const SizedBox(height: 40),
                     _buildSubmitButton(),
                   ],
