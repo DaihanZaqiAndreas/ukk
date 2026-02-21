@@ -4,6 +4,7 @@ import 'login.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'tambah_user.dart';
 import 'package:intl/intl.dart';
+import 'package:rxdart/rxdart.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -73,51 +74,95 @@ class _AdminDashboardState extends State<AdminDashboard> {
 class DashboardHomeContent extends StatelessWidget {
   const DashboardHomeContent({super.key});
 
-  // 1. Fungsi Statistik (Tetap)
-  Future<Map<String, dynamic>> _getStats() async {
+  // 1. Stream Statistik (Auto Update dengan Realtime)
+  // 1. Stream Statistik (Auto Update dengan Realtime)
+  Stream<Map<String, dynamic>> _streamStats() {
     final supabase = Supabase.instance.client;
-    final responses = await Future.wait([
-      supabase.from('kategori').select('id'),
-      supabase.from('alat').select('stok'),
-      supabase.from('peminjaman').select('id').eq('status', 'dipinjam'),
-    ]);
 
-    int totalStok = 0;
-    for (var item in (responses[1] as List)) {
-      totalStok += (item['stok'] as int? ?? 0);
-    }
+    // Gabungkan 4 stream dengan Rx.combineLatest4
+    return Rx.combineLatest4(
+      supabase.from('kategori').stream(primaryKey: ['id']),
+      supabase.from('alat').stream(primaryKey: ['id']),
+      supabase
+          .from('peminjaman')
+          .stream(primaryKey: ['id'])
+          .eq('status', 'dipinjam'),
+      supabase.from('pengembalian').stream(primaryKey: ['id']),
+      (
+        List<dynamic> kategoriList,
+        List<dynamic> alatList,
+        List<dynamic> pinjamList,
+        List<dynamic> dendaList,
+      ) {
+        // Hitung Total Stok
+        int totalStok = 0;
+        for (var item in alatList) {
+          totalStok += (item['stok'] as int? ?? 0);
+        }
 
-    return {
-      'totalKategori': (responses[0] as List).length,
-      'totalStok': totalStok,
-      'totalPinjam': (responses[2] as List).length,
-    };
+        // Hitung Total Denda
+        int totalDenda = 0;
+        if (dendaList.isNotEmpty) {
+          totalDenda = dendaList.fold(
+            0,
+            (sum, item) => sum + (item['denda'] as int? ?? 0),
+          );
+        }
+
+        return {
+          'totalKategori': kategoriList.length,
+          'totalStok': totalStok,
+          'totalPinjam': pinjamList.length,
+          'totalDenda': totalDenda,
+        };
+      },
+    );
   }
 
-  // 2. Fungsi Mengambil Riwayat + Nama Alat (Manual Fetch)
+  // 2. Stream Riwayat (Limit 5 Terakhir)
   Stream<List<Map<String, dynamic>>> _streamRecentHistory() {
     final supabase = Supabase.instance.client;
     return supabase
         .from('peminjaman')
         .stream(primaryKey: ['id'])
         .order('tanggal_pinjam', ascending: false)
-        .limit(5); // Ambil 5 data terbaru
+        .limit(5);
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _getStats(),
+    return StreamBuilder<Map<String, dynamic>>(
+      stream: _streamStats(), // ✅ Ganti Future jadi Stream
       builder: (context, snapshot) {
-        final stats = snapshot.data;
+        // Default values saat loading
+        String valKategori = "...";
+        String valStok = "...";
+        String valPinjam = "...";
+        String valDenda = "Rp ...";
+
+        if (snapshot.hasData) {
+          final stats = snapshot.data!;
+          valKategori = "${stats['totalKategori']}";
+          valStok = "${stats['totalStok']}";
+          valPinjam = "${stats['totalPinjam']}";
+
+          // Format Rupiah
+          final int dendaRaw = stats['totalDenda'] ?? 0;
+          valDenda = NumberFormat.currency(
+            locale: 'id_ID',
+            symbol: 'Rp ',
+            decimalDigits: 0,
+          ).format(dendaRaw);
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header Dashboard
             const Padding(
               padding: EdgeInsets.fromLTRB(24, 60, 24, 10),
               child: Text(
-                "Dashboard Admin",
+                "Dashboard Petugas",
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 24,
@@ -126,6 +171,8 @@ class DashboardHomeContent extends StatelessWidget {
                 ),
               ),
             ),
+
+            // Grid Statistik
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 20.0,
@@ -141,32 +188,35 @@ class DashboardHomeContent extends StatelessWidget {
                 children: [
                   _buildStatCard(
                     "Kategori Alat",
-                    "${stats?['totalKategori'] ?? '...'}",
+                    valKategori,
                     const Color(0xFF1565C0),
                     Icons.inventory_2_outlined,
                   ),
                   _buildStatCard(
                     "Stok Alat",
-                    "${stats?['totalStok'] ?? '...'}",
+                    valStok,
                     const Color(0xFFEF5350),
                     Icons.construction_outlined,
                   ),
                   _buildStatCard(
-                    "Denda",
-                    "Rp 0",
+                    "Total Denda",
+                    valDenda,
                     const Color(0xFF66BB6A),
                     Icons.payments_outlined,
                   ),
                   _buildStatCard(
-                    "Peminjaman",
-                    "${stats?['totalPinjam'] ?? '...'}",
+                    "Sedang Dipinjam",
+                    valPinjam,
                     const Color(0xFFFFA726),
                     Icons.assignment_outlined,
                   ),
                 ],
               ),
             ),
+
             const SizedBox(height: 10),
+
+            // Section Bawah (Riwayat)
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -193,15 +243,14 @@ class DashboardHomeContent extends StatelessWidget {
                               color: Color(0xFF1E293B),
                             ),
                           ),
-                          TextButton(
-                            onPressed: () {},
-                            child: const Text("Lihat Semua"),
-                          ),
+                         
                         ],
                       ),
                       const SizedBox(height: 10),
-                      // PANGGIL WIDGET TABEL DISINI
+
+                      // Panggil Tabel
                       Expanded(child: _buildHistoryTable()),
+
                       const SizedBox(height: 20),
                     ],
                   ),
@@ -214,10 +263,45 @@ class DashboardHomeContent extends StatelessWidget {
     );
   }
 
-  // --- TABEL RIWAYAT YANG SUDAH DIUBAH KOLOMNYA ---
+  // --- WIDGET HELPER: STAT CARD ---
+  Widget _buildStatCard(
+    String title,
+    String value,
+    Color color,
+    IconData icon,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 28),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+          ),
+          Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGET HELPER: HISTORY TABLE ---
   Widget _buildHistoryTable() {
     return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _streamRecentHistory(), // Menggunakan Stream agar auto-update
+      stream: _streamRecentHistory(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -321,7 +405,7 @@ class DashboardHomeContent extends StatelessWidget {
 
                 return DataRow(
                   cells: [
-                    // KOLOM 1: Nama Alat (Ambil pakai FutureBuilder kecil)
+                    // KOLOM 1: Nama Alat (Fetch)
                     DataCell(
                       FutureBuilder(
                         future: Supabase.instance.client
@@ -386,40 +470,6 @@ class DashboardHomeContent extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildStatCard(
-    String title,
-    String value,
-    Color color,
-    IconData icon,
-  ) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 28),
-          const Spacer(),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-          Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-        ],
-      ),
     );
   }
 }

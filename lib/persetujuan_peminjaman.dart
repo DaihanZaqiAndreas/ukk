@@ -28,12 +28,11 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
 
   // --- LOGIKA DATA ---
   Future<List<Map<String, dynamic>>> _fetchDataManual() async {
-    // Select semua kolom dari peminjaman
     final List<dynamic> response = await supabase
         .from('peminjaman')
         .select()
         .eq('status', 'menunggu')
-        .order('tanggal_pinjam', ascending: false); // Urutkan dari yang terbaru
+        .order('tanggal_pinjam', ascending: false);
 
     List<Map<String, dynamic>> results = [];
 
@@ -69,51 +68,84 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
     return results;
   }
 
+  // ========== UPDATE STATUS (DENGAN TRIGGER OTOMATIS) ==========
+  // KODE INI SUDAH DISEDERHANAKAN!
+  // Trigger database yang akan otomatis update stok
   Future<void> _updateStatus(
     BuildContext context,
     String id,
     int alatId,
+    int jumlah, // Tambahkan parameter jumlah
     String status,
   ) async {
     try {
+      // --- VALIDASI STOK SEBELUM APPROVE (OPSIONAL) ---
+      // Bisa di-skip karena trigger juga akan validasi
+      // Tapi lebih baik kasih feedback ke user sebelum approve
       if (status == 'dipinjam') {
         final alatData = await supabase
             .from('alat')
-            .select('stok')
+            .select('stok, nama_alat')
             .eq('id', alatId)
             .single();
+
         int stokSekarang = alatData['stok'] as int;
+        String namaAlat = alatData['nama_alat'] ?? 'Alat';
 
-        // Ambil jumlah yang diminta user, default 1 jika null
-        // Pastikan tabel peminjaman Anda punya kolom 'jumlah'
-        // int jumlahMinta = 1; // Atau ambil dari row['jumlah']
-
-        if (stokSekarang <= 0) {
+        if (stokSekarang < jumlah) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("Stok alat habis!"),
+              SnackBar(
+                content: Text(
+                  "Stok $namaAlat tidak mencukupi!\n"
+                  "Tersedia: $stokSekarang, Diminta: $jumlah",
+                ),
                 backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 4),
               ),
             );
           }
           return;
         }
-        // Kurangi Stok
-        await supabase
-            .from('alat')
-            .update({'stok': stokSekarang - 1})
-            .eq('id', alatId);
       }
 
+      // --- UPDATE STATUS SAJA ---
+      // Trigger otomatis akan:
+      // 1. Kurangi stok jika status = 'dipinjam'
+      // 2. Kembalikan stok jika status = 'ditolak' (dari 'dipinjam')
+      // 3. Log perubahan stok
       await supabase.from('peminjaman').update({'status': status}).eq('id', id);
+
+      // Refresh data
       _refreshData();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Permintaan berhasil di-${status.toUpperCase()}"),
+            content: Text(
+              status == 'dipinjam'
+                  ? "Peminjaman disetujui!"
+                  : "Peminjaman ditolak.",
+            ),
             backgroundColor: status == 'dipinjam' ? Colors.green : Colors.red,
+          ),
+        );
+      }
+    } on PostgrestException catch (e) {
+      // Handle error dari trigger (misal: stok tidak cukup)
+      if (mounted) {
+        String errorMsg = "Error: ${e.message}";
+
+        // Buat pesan lebih user-friendly
+        if (e.message.contains('Stok tidak mencukupi')) {
+          errorMsg = "⚠️ Stok tidak mencukupi untuk peminjaman ini!";
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -139,6 +171,14 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          // Tombol refresh manual
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshData,
+            tooltip: 'Refresh',
+          ),
+        ],
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _futureData,
@@ -148,9 +188,22 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
           }
           if (snapshot.hasError) {
             return Center(
-              child: Text(
-                "Terjadi kesalahan memuat data",
-                style: TextStyle(color: Colors.grey[600]),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 60, color: Colors.red[300]),
+                  const SizedBox(height: 16),
+                  Text(
+                    "Terjadi kesalahan memuat data",
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: _refreshData,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text("Coba Lagi"),
+                  ),
+                ],
               ),
             );
           }
@@ -175,22 +228,23 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
     );
   }
 
-  // --- WIDGET KARTU PERMINTAAN (DENGAN GAMBAR) ---
+  // --- WIDGET KARTU PERMINTAAN ---
   Widget _buildRequestCard(Map<String, dynamic> item, BuildContext context) {
     final namaAlat = item['alat']?['nama_alat'] ?? "Alat Tidak Dikenal";
     final stokAlat = item['alat']?['stok'] ?? 0;
-    // Mengambil Image URL dari database
     final String? imageUrl = item['alat']?['image_url'];
 
     final namaUser = item['pengguna']?['nama'] ?? "User Tidak Dikenal";
-    final int jumlahPinjam =
-        item['jumlah'] ?? 1; // Default 1 jika kolom jumlah null
+    final int jumlahPinjam = item['jumlah'] ?? 1;
 
     final tglPinjam = item['tanggal_pinjam'] != null
         ? DateFormat(
             'd MMM yyyy, HH:mm',
           ).format(DateTime.parse(item['tanggal_pinjam']).toLocal())
         : "-";
+
+    // Cek apakah stok cukup
+    final bool stokCukup = stokAlat >= jumlahPinjam;
 
     return Container(
       decoration: BoxDecoration(
@@ -211,7 +265,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // --- 1. GAMBAR PRODUK ---
+                // --- GAMBAR PRODUK ---
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
@@ -251,12 +305,11 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
 
                 const SizedBox(width: 12),
 
-                // --- 2. INFORMASI UTAMA ---
+                // --- INFORMASI UTAMA ---
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Nama Alat
                       Text(
                         namaAlat,
                         style: const TextStyle(
@@ -294,32 +347,32 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
 
                       const SizedBox(height: 6),
 
-                      // Indikator Stok Gudang
+                      // Indikator Stok
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: stokAlat > 0
+                          color: stokCukup
                               ? Colors.green.shade50
                               : Colors.red.shade50,
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(
-                            color: stokAlat > 0
+                            color: stokCukup
                                 ? Colors.green.shade200
                                 : Colors.red.shade200,
                             width: 0.5,
                           ),
                         ),
                         child: Text(
-                          stokAlat > 0
-                              ? "Stok Gudang: $stokAlat"
-                              : "Stok Habis!",
+                          stokCukup
+                              ? "Stok: $stokAlat (Cukup)"
+                              : "Stok: $stokAlat (Tidak Cukup!)",
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
-                            color: stokAlat > 0
+                            color: stokCukup
                                 ? Colors.green.shade700
                                 : Colors.red.shade700,
                           ),
@@ -329,7 +382,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
                   ),
                 ),
 
-                // --- 3. TANGGAL (Pojok Kanan Atas) ---
+                // --- TANGGAL ---
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -338,7 +391,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
                       style: TextStyle(fontSize: 10, color: Colors.grey[400]),
                     ),
                     Text(
-                      tglPinjam.split(',')[0], // Tgl saja
+                      tglPinjam.split(',')[0],
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -346,7 +399,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
                       ),
                     ),
                     Text(
-                      tglPinjam.split(',')[1], // Jam saja
+                      tglPinjam.split(',')[1],
                       style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
                   ],
@@ -357,7 +410,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
 
           const Divider(height: 1, color: Color(0xFFF1F5F9)),
 
-          // --- 4. TOMBOL AKSI ---
+          // --- TOMBOL AKSI ---
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
@@ -368,6 +421,7 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
                       context,
                       item['id'].toString(),
                       item['alat_id'],
+                      jumlahPinjam, // Kirim jumlah
                       'ditolak',
                     ),
                     style: OutlinedButton.styleFrom(
@@ -384,22 +438,29 @@ class _PersetujuanPeminjamanPageState extends State<PersetujuanPeminjamanPage> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => _updateStatus(
-                      context,
-                      item['id'].toString(),
-                      item['alat_id'],
-                      'dipinjam',
-                    ),
+                    onPressed: stokCukup
+                        ? () => _updateStatus(
+                            context,
+                            item['id'].toString(),
+                            item['alat_id'],
+                            jumlahPinjam, // Kirim jumlah
+                            'dipinjam',
+                          )
+                        : null, // Disable jika stok tidak cukup
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.grey[300],
+                      disabledForegroundColor: Colors.grey[500],
                       elevation: 0,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),
-                    child: const Text("Setuju & Pinjamkan"),
+                    child: Text(
+                      stokCukup ? "Setuju & Pinjamkan" : "Stok Habis",
+                    ),
                   ),
                 ),
               ],

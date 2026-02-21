@@ -6,6 +6,9 @@ import 'persetujuan_peminjaman.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'dart:async';
+import 'package:rxdart/rxdart.dart';
+import 'dart:typed_data';
 
 // ===============================
 // DASHBOARD PETUGAS (UTAMA)
@@ -71,47 +74,91 @@ class _PetugasDashboardState extends State<PetugasDashboard> {
 class DashboardHomeContent extends StatelessWidget {
   const DashboardHomeContent({super.key});
 
-  // 1. Fungsi Statistik (Tetap)
-  Future<Map<String, dynamic>> _getStats() async {
+  // 1. Stream Statistik (Auto Update dengan Realtime)
+  // 1. Stream Statistik (Auto Update dengan Realtime)
+  Stream<Map<String, dynamic>> _streamStats() {
     final supabase = Supabase.instance.client;
-    final responses = await Future.wait([
-      supabase.from('kategori').select('id'),
-      supabase.from('alat').select('stok'),
-      supabase.from('peminjaman').select('id').eq('status', 'dipinjam'),
-    ]);
 
-    int totalStok = 0;
-    for (var item in (responses[1] as List)) {
-      totalStok += (item['stok'] as int? ?? 0);
-    }
+    // Gabungkan 4 stream dengan Rx.combineLatest4
+    return Rx.combineLatest4(
+      supabase.from('kategori').stream(primaryKey: ['id']),
+      supabase.from('alat').stream(primaryKey: ['id']),
+      supabase
+          .from('peminjaman')
+          .stream(primaryKey: ['id'])
+          .eq('status', 'dipinjam'),
+      supabase.from('pengembalian').stream(primaryKey: ['id']),
+      (
+        List<dynamic> kategoriList,
+        List<dynamic> alatList,
+        List<dynamic> pinjamList,
+        List<dynamic> dendaList,
+      ) {
+        // Hitung Total Stok
+        int totalStok = 0;
+        for (var item in alatList) {
+          totalStok += (item['stok'] as int? ?? 0);
+        }
 
-    return {
-      'totalKategori': (responses[0] as List).length,
-      'totalStok': totalStok,
-      'totalPinjam': (responses[2] as List).length,
-    };
+        // Hitung Total Denda
+        int totalDenda = 0;
+        if (dendaList.isNotEmpty) {
+          totalDenda = dendaList.fold(
+            0,
+            (sum, item) => sum + (item['denda'] as int? ?? 0),
+          );
+        }
+
+        return {
+          'totalKategori': kategoriList.length,
+          'totalStok': totalStok,
+          'totalPinjam': pinjamList.length,
+          'totalDenda': totalDenda,
+        };
+      },
+    );
   }
 
-  // 2. Fungsi Mengambil Riwayat + Nama Alat (Manual Fetch)
+  // 2. Stream Riwayat (Limit 5 Terakhir)
   Stream<List<Map<String, dynamic>>> _streamRecentHistory() {
     final supabase = Supabase.instance.client;
     return supabase
         .from('peminjaman')
         .stream(primaryKey: ['id'])
         .order('tanggal_pinjam', ascending: false)
-        .limit(5); // Ambil 5 data terbaru
+        .limit(5);
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _getStats(),
+    return StreamBuilder<Map<String, dynamic>>(
+      stream: _streamStats(), // ✅ Ganti Future jadi Stream
       builder: (context, snapshot) {
-        final stats = snapshot.data;
+        // Default values saat loading
+        String valKategori = "...";
+        String valStok = "...";
+        String valPinjam = "...";
+        String valDenda = "Rp ...";
+
+        if (snapshot.hasData) {
+          final stats = snapshot.data!;
+          valKategori = "${stats['totalKategori']}";
+          valStok = "${stats['totalStok']}";
+          valPinjam = "${stats['totalPinjam']}";
+
+          // Format Rupiah
+          final int dendaRaw = stats['totalDenda'] ?? 0;
+          valDenda = NumberFormat.currency(
+            locale: 'id_ID',
+            symbol: 'Rp ',
+            decimalDigits: 0,
+          ).format(dendaRaw);
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header Dashboard
             const Padding(
               padding: EdgeInsets.fromLTRB(24, 60, 24, 10),
               child: Text(
@@ -124,6 +171,8 @@ class DashboardHomeContent extends StatelessWidget {
                 ),
               ),
             ),
+
+            // Grid Statistik
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 20.0,
@@ -139,32 +188,35 @@ class DashboardHomeContent extends StatelessWidget {
                 children: [
                   _buildStatCard(
                     "Kategori Alat",
-                    "${stats?['totalKategori'] ?? '...'}",
+                    valKategori,
                     const Color(0xFF1565C0),
                     Icons.inventory_2_outlined,
                   ),
                   _buildStatCard(
                     "Stok Alat",
-                    "${stats?['totalStok'] ?? '...'}",
+                    valStok,
                     const Color(0xFFEF5350),
                     Icons.construction_outlined,
                   ),
                   _buildStatCard(
-                    "Denda",
-                    "Rp 0",
+                    "Total Denda",
+                    valDenda,
                     const Color(0xFF66BB6A),
                     Icons.payments_outlined,
                   ),
                   _buildStatCard(
-                    "Peminjaman",
-                    "${stats?['totalPinjam'] ?? '...'}",
+                    "Sedang Dipinjam",
+                    valPinjam,
                     const Color(0xFFFFA726),
                     Icons.assignment_outlined,
                   ),
                 ],
               ),
             ),
+
             const SizedBox(height: 10),
+
+            // Section Bawah (Riwayat)
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -191,15 +243,13 @@ class DashboardHomeContent extends StatelessWidget {
                               color: Color(0xFF1E293B),
                             ),
                           ),
-                          TextButton(
-                            onPressed: () {},
-                            child: const Text("Lihat Semua"),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 10),
-                      // PANGGIL WIDGET TABEL DISINI
+
+                      // Panggil Tabel
                       Expanded(child: _buildHistoryTable()),
+
                       const SizedBox(height: 20),
                     ],
                   ),
@@ -212,10 +262,45 @@ class DashboardHomeContent extends StatelessWidget {
     );
   }
 
-  // --- TABEL RIWAYAT YANG SUDAH DIUBAH KOLOMNYA ---
+  // --- WIDGET HELPER: STAT CARD ---
+  Widget _buildStatCard(
+    String title,
+    String value,
+    Color color,
+    IconData icon,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 28),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+          ),
+          Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGET HELPER: HISTORY TABLE ---
   Widget _buildHistoryTable() {
     return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _streamRecentHistory(), // Menggunakan Stream agar auto-update
+      stream: _streamRecentHistory(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -319,7 +404,7 @@ class DashboardHomeContent extends StatelessWidget {
 
                 return DataRow(
                   cells: [
-                    // KOLOM 1: Nama Alat (Ambil pakai FutureBuilder kecil)
+                    // KOLOM 1: Nama Alat (Fetch)
                     DataCell(
                       FutureBuilder(
                         future: Supabase.instance.client
@@ -386,40 +471,6 @@ class DashboardHomeContent extends StatelessWidget {
       },
     );
   }
-
-  Widget _buildStatCard(
-    String title,
-    String value,
-    Color color,
-    IconData icon,
-  ) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 28),
-          const Spacer(),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-          Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-        ],
-      ),
-    );
-  }
 }
 
 class PengembalianPage extends StatefulWidget {
@@ -445,26 +496,12 @@ class _PengembalianPageState extends State<PengembalianPage> {
   Future<void> _verifikasi(Map<String, dynamic> item) async {
     setState(() => _isLoading = true);
     try {
-      final int toolId = item['alat_id'];
-      final int qty = item['jumlah'] ?? 1;
       final int peminjamanId = item['id'];
 
-      // 1. Ambil Stok Terkini
-      final toolData = await supabase
-          .from('alat')
-          .select('stok')
-          .eq('id', toolId)
-          .single();
+      // --- BAGIAN UPDATE STOK DIHAPUS ---
+      // Kita tidak lagi mengambil stok lama dan menambahkannya.
 
-      final int currentStock = toolData['stok'] ?? 0;
-
-      // 2. Update Stok (Stok Lama + Jumlah Kembali)
-      await supabase
-          .from('alat')
-          .update({'stok': currentStock + qty})
-          .eq('id', toolId);
-
-      // 3. Tandai Peminjaman Selesai
+      // HANYA UPDATE STATUS PEMINJAMAN MENJADI 'SELESAI'
       await supabase
           .from('peminjaman')
           .update({'status': 'selesai'})
@@ -473,7 +510,7 @@ class _PengembalianPageState extends State<PengembalianPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Barang diterima & Stok dikembalikan ke Gudang"),
+            content: Text("Barang diterima (Tanpa Restock)"),
             backgroundColor: Colors.green,
           ),
         );
@@ -492,7 +529,7 @@ class _PengembalianPageState extends State<PengembalianPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9), // Background abu muda
+      backgroundColor: const Color(0xFFF1F5F9),
       appBar: AppBar(
         title: const Text(
           "Verifikasi Pengembalian",
@@ -538,7 +575,6 @@ class _PengembalianPageState extends State<PengembalianPage> {
             itemBuilder: (context, index) {
               final item = data[index];
 
-              // Kita ambil data Alat (Gambar & Nama) di sini
               return FutureBuilder(
                 future: supabase
                     .from('alat')
@@ -546,7 +582,6 @@ class _PengembalianPageState extends State<PengembalianPage> {
                     .eq('id', item['alat_id'])
                     .maybeSingle(),
                 builder: (context, snap) {
-                  // Loading state kecil saat ambil data alat
                   if (!snap.hasData) {
                     return const SizedBox(
                       height: 100,
@@ -577,7 +612,6 @@ class _PengembalianPageState extends State<PengembalianPage> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // --- BAGIAN GAMBAR (PENGGANTI ICON) ---
                             ClipRRect(
                               borderRadius: BorderRadius.circular(12),
                               child: Container(
@@ -604,7 +638,6 @@ class _PengembalianPageState extends State<PengembalianPage> {
                               ),
                             ),
                             const SizedBox(width: 16),
-                            // --- BAGIAN INFORMASI ---
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -653,7 +686,6 @@ class _PengembalianPageState extends State<PengembalianPage> {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        // --- TOMBOL TERIMA ---
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
@@ -680,9 +712,7 @@ class _PengembalianPageState extends State<PengembalianPage> {
                                   )
                                 : const Icon(Icons.check_circle_outline),
                             label: Text(
-                              _isLoading
-                                  ? "Memproses..."
-                                  : "TERIMA BARANG & RESTOCK",
+                              _isLoading ? "Memproses..." : "TERIMA BARANG",
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -705,6 +735,9 @@ class _PengembalianPageState extends State<PengembalianPage> {
 // ===============================
 // HALAMAN LAPORAN
 // ===============================
+// ===============================
+// HALAMAN LAPORAN (FIXED)
+// ===============================
 class LaporanPetugasPage extends StatefulWidget {
   const LaporanPetugasPage({super.key});
 
@@ -724,12 +757,8 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
   }
 
   // --- 1. MENGAMBIL DATA DARI SUPABASE ---
- Future<void> _fetchLaporan() async {
+  Future<void> _fetchLaporan() async {
     try {
-      // PERBAIKAN:
-      // 1. Ubah 'user:user_id(...)' menjadi 'user:user!fk_peminjaman_user(...)'
-      // 2. Pastikan 'alat' juga menggunakan foreign key yang spesifik agar aman
-      
       final response = await supabase
           .from('peminjaman')
           .select('''
@@ -740,7 +769,7 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
           ''')
           .order('tanggal_pinjam', ascending: false);
 
-      // Filter di sisi klien: hanya yang statusnya 'dikembalikan' atau 'selesai'
+      // Filter di sisi klien
       final dataFiltered = (response as List).where((item) {
         final status = item['status']?.toString().toLowerCase();
         return status == 'dikembalikan' || status == 'selesai';
@@ -753,40 +782,44 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
     } catch (e) {
       debugPrint('Error fetching laporan: $e');
       setState(() => _isLoading = false);
-      
-      // Opsional: Tampilkan snackbar jika error, agar kita tahu di layar HP
-      if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Gagal load data: ${e.toString()}')),
-         );
-      }
     }
   }
+
+  // --- HELPER: AMAN DARI ERROR TYPE (LIST vs MAP) ---
+  // Fungsi ini mencegah error layar merah jika Supabase mengembalikan data berbeda format
+  Map<String, dynamic>? _parsePengembalian(dynamic data) {
+    if (data == null) return null;
+
+    // Jika Supabase mengembalikan List (One-to-Many)
+    if (data is List) {
+      return data.isNotEmpty ? data[0] as Map<String, dynamic> : null;
+    }
+
+    // Jika Supabase mengembalikan Map (One-to-One) -> INI YANG MEMPERBAIKI ERROR ANDA
+    if (data is Map) {
+      return data as Map<String, dynamic>;
+    }
+
+    return null;
+  }
+
   // --- 2. LOGIKA PEMBUATAN PDF ---
   Future<void> _cetakPdf() async {
     final doc = pw.Document();
-    
-    // Load font regular (opsional, default font PDF kadang tidak support simbol Rp)
+
+    // Menggunakan font standar agar tidak perlu download font eksternal yang berat
     final font = await PdfGoogleFonts.nunitoExtraLight();
 
-    // Persiapkan data gambar untuk PDF (network image harus didownload dulu)
-    // Kita lakukan ini agar proses build PDF tidak terlalu berat di UI thread
-    
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) {
-          return [
-            _buildPdfHeader(),
-            pw.SizedBox(height: 20),
-            _buildPdfTable(),
-          ];
+          return [_buildPdfHeader(), pw.SizedBox(height: 20), _buildPdfTable()];
         },
       ),
     );
 
-    // Buka preview PDF / Print Dialog
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => doc.save(),
     );
@@ -811,36 +844,57 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
 
   pw.Widget _buildPdfTable() {
     return pw.TableHelper.fromTextArray(
-      headers: ['No', 'Barang', 'Peminjam', 'Tgl Pinjam', 'Tgl Kembali', 'Denda'],
-      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+      headers: [
+        'No',
+        'Barang',
+        'Peminjam',
+        'Tgl Pinjam',
+        'Tgl Kembali',
+        'Denda',
+      ],
+      headerStyle: pw.TextStyle(
+        fontWeight: pw.FontWeight.bold,
+        color: PdfColors.white,
+      ),
       headerDecoration: const pw.BoxDecoration(color: PdfColors.blue700),
-      rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300))),
+      rowDecoration: const pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300)),
+      ),
       cellAlignment: pw.Alignment.centerLeft,
       cellPadding: const pw.EdgeInsets.all(5),
       data: List<List<dynamic>>.generate(_laporanList.length, (index) {
         final item = _laporanList[index];
         final alat = item['alat'] ?? {};
         final user = item['user'] ?? {};
-        
-        // Ambil data pengembalian (karena array, ambil yg pertama atau sesuai logika db)
-        final pengembalianData = (item['pengembalian'] as List?)?.isNotEmpty == true 
-            ? item['pengembalian'][0] 
-            : null;
-            
-        final tglPinjam = DateFormat('dd/MM/yy').format(DateTime.parse(item['tanggal_pinjam']));
-        
-        // Tgl kembali aktual
+
+        // Gunakan Helper Aman untuk PDF juga
+        final pengembalianData = _parsePengembalian(item['pengembalian']);
+
+        final tglPinjam = DateFormat(
+          'dd/MM/yy',
+        ).format(DateTime.parse(item['tanggal_pinjam']));
+
         String tglKembali = '-';
-        if (pengembalianData != null && pengembalianData['tgl_kembali_aktual'] != null) {
-          tglKembali = DateFormat('dd/MM/yy').format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
+        if (pengembalianData != null &&
+            pengembalianData['tgl_kembali_aktual'] != null) {
+          tglKembali = DateFormat(
+            'dd/MM/yy',
+          ).format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
         } else if (item['updated_at'] != null) {
-             tglKembali = DateFormat('dd/MM/yy').format(DateTime.parse(item['updated_at']));
+          tglKembali = DateFormat(
+            'dd/MM/yy',
+          ).format(DateTime.parse(item['updated_at']));
         }
 
-        // Denda
-        final dendaVal = pengembalianData != null ? (pengembalianData['denda'] ?? 0) : (item['denda'] ?? 0);
-        final dendaStr = dendaVal > 0 
-            ? NumberFormat.currency(locale: 'id', symbol: 'Rp ', decimalDigits: 0).format(dendaVal)
+        final dendaVal = pengembalianData != null
+            ? (pengembalianData['denda'] ?? 0)
+            : (item['denda'] ?? 0);
+        final dendaStr = dendaVal > 0
+            ? NumberFormat.currency(
+                locale: 'id',
+                symbol: 'Rp ',
+                decimalDigits: 0,
+              ).format(dendaVal)
             : '-';
 
         return [
@@ -849,7 +903,7 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
           user['nama'] ?? '-',
           tglPinjam,
           tglKembali,
-          dendaStr
+          dendaStr,
         ];
       }),
     );
@@ -861,75 +915,94 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text("Laporan Transaksi", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          "Laporan Transaksi",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _laporanList.isEmpty ? null : _cetakPdf,
-        icon: const Icon(Icons.print),
-        label: const Text("Cetak PDF"),
+        icon: const Icon(Icons.print, color: Colors.white),
+        label: const Text("Cetak PDF", style: TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1E88E5),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _laporanList.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.folder_off_outlined, size: 60, color: Colors.grey[400]),
-                      const SizedBox(height: 10),
-                      Text("Belum ada data laporan", style: TextStyle(color: Colors.grey[600])),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.folder_off_outlined,
+                    size: 60,
+                    color: Colors.grey[400],
                   ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _laporanList.length,
-                  itemBuilder: (context, index) {
-                    return _buildReportCard(_laporanList[index]);
-                  },
-                ),
+                  const SizedBox(height: 10),
+                  Text(
+                    "Belum ada data laporan",
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _laporanList.length,
+              itemBuilder: (context, index) {
+                return _buildReportCard(_laporanList[index]);
+              },
+            ),
     );
   }
 
   Widget _buildReportCard(Map<String, dynamic> item) {
     final alat = item['alat'] ?? {};
     final user = item['user'] ?? {};
-    
-    // Ambil data pengembalian untuk denda & tanggal aktual
-    final pengembalianList = item['pengembalian'] as List?;
-    final pengembalianData = (pengembalianList != null && pengembalianList.isNotEmpty) 
-        ? pengembalianList[0] 
-        : null;
 
-    final tglPinjam = DateFormat('dd MMM yyyy').format(DateTime.parse(item['tanggal_pinjam']));
-    
+    // --- BAGIAN YANG DIPERBAIKI (Mencegah TypeError) ---
+    final pengembalianData = _parsePengembalian(item['pengembalian']);
+
+    final tglPinjam = DateFormat(
+      'dd MMM yyyy',
+    ).format(DateTime.parse(item['tanggal_pinjam']));
+
     String tglKembali = '-';
-    if (pengembalianData != null && pengembalianData['tgl_kembali_aktual'] != null) {
-      tglKembali = DateFormat('dd MMM yyyy').format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
+    if (pengembalianData != null &&
+        pengembalianData['tgl_kembali_aktual'] != null) {
+      tglKembali = DateFormat(
+        'dd MMM yyyy',
+      ).format(DateTime.parse(pengembalianData['tgl_kembali_aktual']));
     } else if (item['status'] == 'dikembalikan') {
-      // Fallback jika data pengembalian belum tersync tapi status sudah berubah
-       tglKembali = DateFormat('dd MMM yyyy').format(DateTime.parse(item['updated_at'] ?? DateTime.now().toIso8601String()));
+      tglKembali = DateFormat('dd MMM yyyy').format(
+        DateTime.parse(item['updated_at'] ?? DateTime.now().toIso8601String()),
+      );
     }
 
-    final int denda = pengembalianData != null ? (pengembalianData['denda'] ?? 0) : (item['denda'] ?? 0);
+    final int denda = pengembalianData != null
+        ? (pengembalianData['denda'] ?? 0)
+        : (item['denda'] ?? 0);
     final bool kenaDenda = denda > 0;
 
+    // Tampilan UI tetap sama persis
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Column(
         children: [
-          // Header: User & Status Denda
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -937,19 +1010,30 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
                 CircleAvatar(
                   radius: 16,
                   backgroundColor: Colors.blue.shade50,
-                  child: Text((user['nama'] ?? 'U')[0].toUpperCase(), 
-                      style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
+                  child: Text(
+                    (user['nama'] ?? 'U')[0].toUpperCase(),
+                    style: TextStyle(
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     user['nama'] ?? 'Tanpa Nama',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
                   ),
                 ),
                 if (kenaDenda)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.red.shade50,
                       borderRadius: BorderRadius.circular(8),
@@ -957,59 +1041,80 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
                     ),
                     child: Text(
                       "Denda: ${NumberFormat.compactCurrency(locale: 'id', symbol: 'Rp', decimalDigits: 0).format(denda)}",
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red.shade700),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red.shade700,
+                      ),
                     ),
                   )
                 else
-                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.green.shade50,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       "Tepat Waktu",
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green.shade700),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade700,
+                      ),
                     ),
                   ),
               ],
             ),
           ),
           const Divider(height: 1),
-          // Body: Barang & Tanggal
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Gambar Produk
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    width: 70, height: 70,
+                    width: 70,
+                    height: 70,
                     color: Colors.grey.shade100,
                     child: alat['image_url'] != null
-                        ? Image.network(alat['image_url'], fit: BoxFit.cover,
-                            errorBuilder: (c, e, s) => const Icon(Icons.image, color: Colors.grey))
+                        ? Image.network(
+                            alat['image_url'],
+                            fit: BoxFit.cover,
+                            errorBuilder: (c, e, s) =>
+                                const Icon(Icons.image, color: Colors.grey),
+                          )
                         : const Icon(Icons.inventory_2, color: Colors.blueGrey),
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Detail
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         alat['nama_alat'] ?? 'Nama Alat',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF2D3748)),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF2D3748),
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Row(
                         children: [
                           _dateBadge("Pinjam", tglPinjam, Colors.blue),
                           const SizedBox(width: 8),
-                          const Icon(Icons.arrow_forward, size: 14, color: Colors.grey),
+                          const Icon(
+                            Icons.arrow_forward,
+                            size: 14,
+                            color: Colors.grey,
+                          ),
                           const SizedBox(width: 8),
                           _dateBadge("Kembali", tglKembali, Colors.orange),
                         ],
@@ -1031,11 +1136,19 @@ class _LaporanPetugasPageState extends State<LaporanPetugasPage> {
       children: [
         Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
         const SizedBox(height: 2),
-        Text(date, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color.shade800)),
+        Text(
+          date,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color.shade800,
+          ),
+        ),
       ],
     );
   }
 }
+
 // ===============================
 // HALAMAN PENGATURAN + LOGOUT
 // ===============================
